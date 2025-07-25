@@ -1,0 +1,15 @@
+.pio/
+.vscode/
+*.elf
+*.bin
+*.hex
+*.map
+*.log
+*.tmp
+*.bak
+*.ioc~
+Backup*/
+EWARM/
+MDK-ARM/
+STM32CubeIDE/
+.DS_Store
