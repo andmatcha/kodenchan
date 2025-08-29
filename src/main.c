@@ -108,12 +108,11 @@ int main(void)
   uint8_t TxData[8];            // 送信するデータ本体（最大8バイト）
   uint32_t TxMailbox;           // 送信バッファ番号
 
-  TxHeader.StdId = 0x321;      // 任意のID
-  TxHeader.IDE = CAN_ID_STD;   // 標準ID
-  TxHeader.RTR = CAN_RTR_DATA; // データフレーム
-  TxHeader.DLC = 1;            // データ長
+  TxHeader.StdId = 0x200;                // 任意のID
+  TxHeader.IDE = CAN_ID_STD;             // 標準ID
+  TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
+  TxHeader.DLC = 8;                      // データ長
   TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
-  TxData[0] = 0x01;            // モーター正転信号
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -124,45 +123,73 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    TxData[0] = 0x01;
-    if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    {
-      printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    }
-    else
-    {
-      printf("failed\r\n");
-    }
-    HAL_Delay(500);
+    // TxData[0] = 0x01;
+    // if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
+    // {
+    //   printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
+    // }
+    // else
+    // {
+    //   printf("failed\r\n");
+    // }
+    // HAL_Delay(500);
 
     // 正回転処理
-    // if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
-    // {
-    //   TxData[0] = 0x01;
-    //   if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    //   {
-    //     printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    //   }
-    //   else
-    //   {
-    //     printf("failed\r\n");
-    //   }
-    //   HAL_Delay(100);
-    // }
+    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
+    {
+      for (int i = 0; i < 4; i++)
+      {
+        TxHeader.StdId = 0x200;
+        TxData[i * 2] = 10000 >> 8;
+        TxData[i * 2 + 1] = 10000;
+        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
+        {
+          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
+          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
+        }
+      }
+      for (int i = 0; i < 4; i++)
+      {
+        TxHeader.StdId = 0x1FF;
+        TxData[i * 2] = 10000 >> 8;
+        TxData[i * 2 + 1] = 10000;
+        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
+        {
+          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
+          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
+        }
+      }
+
+      HAL_Delay(1000);
+    }
     // 逆回転処理
-    // else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
-    // {
-    //   TxData[0] = 0x02;
-    //   if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    //   {
-    //     printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    //   }
-    //   else
-    //   {
-    //     printf("failed\r\n");
-    //   }
-    //   HAL_Delay(100);
-    // }
+    else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
+    {
+      TxHeader.StdId = 0x200;
+      for (int i = 0; i < 4; i++)
+      {
+        TxData[i * 2] = -10000 >> 8;
+        TxData[i * 2 + 1] = -10000;
+        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
+        {
+          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
+          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
+        }
+      }
+      TxHeader.StdId = 0x1FF;
+      for (int i = 0; i < 4; i++)
+      {
+        TxData[i * 2] = -10000 >> 8;
+        TxData[i * 2 + 1] = -10000;
+        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
+        {
+          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
+          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
+        }
+      }
+
+      HAL_Delay(1000);
+    }
   }
   /* USER CODE END 3 */
 }
@@ -221,8 +248,8 @@ static void MX_CAN_Init(void)
   /* USER CODE END CAN_Init 1 */
   hcan.Instance = CAN;
   hcan.Init.Prescaler = 3;
-  // hcan.Init.Mode = CAN_MODE_NORMAL;
-  hcan.Init.Mode = CAN_MODE_LOOPBACK; // ループバック
+  hcan.Init.Mode = CAN_MODE_NORMAL;
+  // hcan.Init.Mode = CAN_MODE_LOOPBACK; // ループバック
   hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
   hcan.Init.TimeSeg1 = CAN_BS1_9TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
