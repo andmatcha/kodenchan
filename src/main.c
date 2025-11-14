@@ -99,7 +99,7 @@ int main(void)
     printf("CAN Start failed\r\n");
     Error_Handler();
   }
-  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_TX_MAILBOX_EMPTY))
+  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_TX_MAILBOX_EMPTY | CAN_IT_RX_FIFO0_MSG_PENDING))
   {
     printf("CAN ActivateNotification failed\r\n");
     Error_Handler();
@@ -159,8 +159,6 @@ int main(void)
           printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
         }
       }
-
-      HAL_Delay(1000);
     }
     // 逆回転処理
     else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
@@ -187,8 +185,6 @@ int main(void)
           printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
         }
       }
-
-      HAL_Delay(1000);
     }
   }
   /* USER CODE END 3 */
@@ -264,6 +260,22 @@ static void MX_CAN_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN CAN_Init 2 */
+  // 受信フィルタ: 全受信（FIFO0へ）
+  CAN_FilterTypeDef sFilterConfig = {0};
+  sFilterConfig.FilterBank = 0;
+  sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+  sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
+  sFilterConfig.FilterIdHigh = 0x0000;
+  sFilterConfig.FilterIdLow = 0x0000;
+  sFilterConfig.FilterMaskIdHigh = 0x0000;
+  sFilterConfig.FilterMaskIdLow = 0x0000;
+  sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+  sFilterConfig.FilterActivation = ENABLE;
+  sFilterConfig.SlaveStartFilterBank = 14; // 単CANでも無害
+  if (HAL_CAN_ConfigFilter(&hcan, &sFilterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END CAN_Init 2 */
 }
@@ -356,6 +368,29 @@ void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
 void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
 {
   printf("CAN Mailbox2 TX complete\r\n");
+}
+
+// 受信（FIFO0メッセージ有）
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+  CAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
+  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK)
+  {
+    if (rxHeader.IDE == CAN_ID_STD)
+    {
+      printf("CAN RX: StdId=0x%03lX DLC=%lu Data:", (unsigned long)rxHeader.StdId, (unsigned long)rxHeader.DLC);
+    }
+    else
+    {
+      printf("CAN RX: ExtId=0x%08lX DLC=%lu Data:", (unsigned long)rxHeader.ExtId, (unsigned long)rxHeader.DLC);
+    }
+    for (uint8_t i = 0; i < rxHeader.DLC; i++)
+    {
+      printf(" %02X", rxData[i]);
+    }
+    printf("\r\n");
+  }
 }
 /* USER CODE END 4 */
 
