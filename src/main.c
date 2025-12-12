@@ -54,7 +54,7 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
-
+void servo_send_angle(float angle_deg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -125,54 +125,12 @@ int main(void)
     // 正回転処理
     if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
     {
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x200;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x1FF;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
+      servo_send_angle(90.0);
     }
     // 逆回転処理
     else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
     {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      TxHeader.StdId = 0x1FF;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
+      servo_send_angle(0.0);
     }
     // 停止処理
     else
@@ -183,7 +141,7 @@ int main(void)
         TxData[i * 2] = 0;
         if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
         {
-          printf("[STOP] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
+          printf("[STOP] CAN Transmit: ID=0x%03lX, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
         }
       }
     }
@@ -353,6 +311,47 @@ void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
 void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
 {
   printf("CAN Mailbox2 TX complete\r\n");
+}
+
+/**
+ * @brief サーボモーターへ角度指令を送信
+ * @param angle_deg 角度 (0.0〜180.0度)
+ *
+ * 使用例:
+ *   servo_send_angle(0.0);    // 0度
+ *   servo_send_angle(90.0);   // 90度
+ *   servo_send_angle(180.0);  // 180度
+ */
+void servo_send_angle(float angle_deg) {
+  CAN_TxHeaderTypeDef TxHeader;
+  uint8_t TxData[8];
+  uint32_t TxMailbox;
+
+  // 角度を0〜1800の整数値に変換 (0.0〜180.0度 → 0〜1800)
+  uint16_t angle_x10 = (uint16_t)(angle_deg * 10.0f);
+
+  // 範囲チェック
+  if (angle_x10 > 1800) {
+    angle_x10 = 1800;
+  }
+
+  // CANヘッダ設定
+  TxHeader.StdId = 0x100;                // サーボモーター用ID
+  TxHeader.IDE = CAN_ID_STD;             // 標準ID
+  TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
+  TxHeader.DLC = 2;                      // データ長2バイト
+  TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
+
+  // データ設定: [angle_high, angle_low]
+  TxData[0] = (angle_x10 >> 8) & 0xFF;   // 上位バイト
+  TxData[1] = angle_x10 & 0xFF;          // 下位バイト
+
+  // CAN送信
+  if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
+  {
+    printf("[SERVO] CAN Transmit: ID=0x%03lX, DATA=0x%02X 0x%02X\r\n",
+           TxHeader.StdId, TxData[0], TxData[1]);
+  }
 }
 /* USER CODE END 4 */
 
