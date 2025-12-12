@@ -125,25 +125,12 @@ int main(void)
     // 正回転処理
     if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
     {
-      servo_send_angle(90.0);
+      send_board4(1, 0, 2);
     }
     // 逆回転処理
     else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
     {
-      servo_send_angle(0.0);
-    }
-    // 停止処理
-    else
-    {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = 0;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[STOP] CAN Transmit: ID=0x%03lX, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-        }
-      }
+      send_board4(0, 0, 2);
     }
   }
   /* USER CODE END 3 */
@@ -314,43 +301,33 @@ void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
 }
 
 /**
- * @brief サーボモーターへ角度指令を送信
- * @param angle_deg 角度 (0.0〜180.0度)
- *
- * 使用例:
- *   servo_send_angle(0.0);    // 0度
- *   servo_send_angle(90.0);   // 90度
- *   servo_send_angle(180.0);  // 180度
+ * @brief 分電基板4へCAN信号を送信
+ * @param dc1 DCモーター1 0: 逆転 1: 正転
+  * @param dc2 DCモーター2 0: 逆転 1: 正転
+  * @param servo サーボモーター 0: 270度 1: 0度 2: 停止
+  *
  */
-void servo_send_angle(float angle_deg) {
+void send_board4(uint8_t dc1, uint8_t dc2, uint8_t servo) {
   CAN_TxHeaderTypeDef TxHeader;
   uint8_t TxData[8];
   uint32_t TxMailbox;
 
-  // 角度を0〜1800の整数値に変換 (0.0〜180.0度 → 0〜1800)
-  uint16_t angle_x10 = (uint16_t)(angle_deg * 10.0f);
-
-  // 範囲チェック
-  if (angle_x10 > 1800) {
-    angle_x10 = 1800;
-  }
-
   // CANヘッダ設定
-  TxHeader.StdId = 0x100;                // サーボモーター用ID
+  TxHeader.StdId = 0x208;                // サーボモーター用ID
   TxHeader.IDE = CAN_ID_STD;             // 標準ID
   TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
-  TxHeader.DLC = 2;                      // データ長2バイト
+  TxHeader.DLC = 3;                      // データ長2バイト
   TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
 
-  // データ設定: [angle_high, angle_low]
-  TxData[0] = (angle_x10 >> 8) & 0xFF;   // 上位バイト
-  TxData[1] = angle_x10 & 0xFF;          // 下位バイト
+  // データ設定
+  TxData[0] = dc1;
+  TxData[1] = dc2;
+  TxData[2] = servo;
 
   // CAN送信
   if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
   {
-    printf("[SERVO] CAN Transmit: ID=0x%03lX, DATA=0x%02X 0x%02X\r\n",
-           TxHeader.StdId, TxData[0], TxData[1]);
+    printf("[Board4] CAN Transmit: ID=0x%03lX, DATA=0x%02X 0x%02X 0x%02X\r\n", TxHeader.StdId, TxData[0], TxData[1], TxData[2]);
   }
 }
 /* USER CODE END 4 */

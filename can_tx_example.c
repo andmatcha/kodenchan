@@ -65,7 +65,7 @@ void servo_send_angle(float angle_deg) {
  *   dc_motor1_send(2, 75);   // 逆転、75%出力
  *   dc_motor1_send(3, 100);  // ブレーキ
  */
-void dc_motor1_send(uint8_t direction, uint8_t duty_percent) {
+void board4_send(uint8_t dc1, uint8_t dc2, uint8_t servo) {
   CAN_TxHeaderTypeDef TxHeader;
   uint8_t TxData[8];
   uint32_t TxMailbox;
@@ -79,7 +79,7 @@ void dc_motor1_send(uint8_t direction, uint8_t duty_percent) {
   }
 
   // CANヘッダ設定
-  TxHeader.StdId = 0x101;                // DCモーター1用ID
+  TxHeader.StdId = 0x208;                // ボード4用ID
   TxHeader.IDE = CAN_ID_STD;             // 標準ID
   TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
   TxHeader.DLC = 2;                      // データ長2バイト
