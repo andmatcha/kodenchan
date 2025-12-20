@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -61,6 +61,11 @@ volatile uint8_t servo_command = 1;           // 0: 増加, 1: 停止, 2: 減少
 CAN_FilterTypeDef can_filter;
 CAN_RxHeaderTypeDef rx_header;
 uint8_t rx_data[8];
+
+// CAN受信デバッグ用
+volatile uint8_t can_received_flag = 0;
+volatile uint32_t can_last_id = 0;
+volatile uint8_t can_last_data = 0;
 
 /* USER CODE END PV */
 
@@ -130,6 +135,11 @@ void Servo_UpdateAngle(void) {
 // CAN RX割り込みハンドラ
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_param) {
   if (HAL_CAN_GetRxMessage(hcan_param, CAN_RX_FIFO0, &rx_header, rx_data) == HAL_OK) {
+    // デバッグ情報を保存 (printfは割り込み内で使わない)
+    can_received_flag = 1;
+    can_last_id = rx_header.StdId;
+    can_last_data = rx_data[2];
+
     // ID 0x208のメッセージを受信
     if (rx_header.StdId == 0x208) {
       // rx_data[2]でサーボモーターの動作を制御
@@ -138,7 +148,6 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_param) {
       }
     }
   }
-  printf("Received CAN ID: 0x%03X Data: %02X\r\n",rx_header.StdId, rx_data[2]);
 }
 
 // TIM1割り込みハンドラ (20ms周期で角度を更新)
@@ -212,6 +221,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // CAN受信時にデバッグ出力 (メインループで実行)
+    if (can_received_flag) {
+      can_received_flag = 0;
+      // printf("Received CAN ID: 0x%03lX Data: %02X\r\n", can_last_id, can_last_data);
+    }
   }
   /* USER CODE END 3 */
 }
