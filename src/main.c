@@ -111,7 +111,7 @@ int main(void)
   {
     Error_Handler();
   }
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1500);  // 2ms pulse width for 50Hz
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 3000);  // 2ms pulse width for 50Hz
   printf("System Initialized\n");
   /* USER CODE END 2 */
 
@@ -119,6 +119,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    // __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 4600);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
