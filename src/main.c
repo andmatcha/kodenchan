@@ -98,6 +98,9 @@ int main(void)
   MX_CAN_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+  // PWM開始
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+
   // CAN開始と受信通知有効化
   if (HAL_CAN_Start(&hcan) != HAL_OK)
   {
@@ -108,6 +111,8 @@ int main(void)
   {
     Error_Handler();
   }
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 2000);
+  printf("System Initialized\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -348,8 +353,20 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
   if (RxHeader.StdId == 0x208)
   {
-    printf("Received\n");
+    if (rx_data[2] == 0)
+    {
+      // PWM 270度方向 (2.5ms パルス)
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 2500);
+      printf("PWM: 270deg (2500us)\n");
+    }
+    else if (rx_data[2] == 2)
+    {
+      // PWM 0度方向 (0.5ms パルス)
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 500);
+      printf("PWM: 0deg (500us)\n");
+    }
   }
+
 }
 /* USER CODE END 4 */
 
