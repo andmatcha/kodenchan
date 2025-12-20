@@ -111,7 +111,7 @@ int main(void)
   {
     Error_Handler();
   }
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 3000);  // 2ms pulse width for 50Hz
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1500);  // 2ms pulse width for 50Hz
   printf("System Initialized\n");
   /* USER CODE END 2 */
 
@@ -239,7 +239,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 31;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 39999;  // 50Hz: 64MHz / (32 * 40000) = 50Hz
+  htim3.Init.Period = 19999;  // 50Hz: 64MHz / (32 * 40000) = 50Hz
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
@@ -357,13 +357,13 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (rx_data[2] == 0)
     {
       // PWM 270度方向 (2.5ms パルス)
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 5000);  // 2.5ms for 50Hz
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 2500);  // 2.5ms for 50Hz
       printf("PWM: 270deg (2500us)\n");
     }
     else if (rx_data[2] == 2)
     {
       // PWM 0度方向 (0.5ms パルス)
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1000);  // 0.5ms for 50Hz
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 500);  // 0.5ms for 50Hz
       printf("PWM: 0deg (500us)\n");
     }
   }
