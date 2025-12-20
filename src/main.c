@@ -32,6 +32,9 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+#define SERVO_MIN_PULSE 500
+#define SERVO_MAX_PULSE 2500
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -47,6 +50,8 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+
+volatile uint16_t servo_duty = 1500;  // 初期値: 1.5ms
 
 /* USER CODE END PV */
 
@@ -352,19 +357,36 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     Error_Handler();
   }
 
+  // PWM 最小500 最大2500
   if (RxHeader.StdId == 0x208)
   {
     if (rx_data[2] == 0)
     {
-      // PWM 270度方向 (2.5ms パルス)
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 2500);  // 2.5ms for 50Hz
-      printf("PWM: 270deg (2500us)\n");
+      // PWM 270度方向
+      if (servo_duty <= SERVO_MAX_PULSE - 100)
+      {
+        servo_duty += 100;
+      }
+      else
+      {
+        servo_duty = SERVO_MAX_PULSE;
+      }
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, servo_duty);
+      printf("PWM: %d\n", servo_duty);
     }
     else if (rx_data[2] == 2)
     {
-      // PWM 0度方向 (0.5ms パルス)
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 500);  // 0.5ms for 50Hz
-      printf("PWM: 0deg (500us)\n");
+      // PWM 0度方向
+      if (servo_duty >= SERVO_MIN_PULSE + 100)
+      {
+        servo_duty -= 100;
+      }
+      else
+      {
+        servo_duty = SERVO_MIN_PULSE;
+      }
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, servo_duty);
+      printf("PWM: %d\n", servo_duty);
     }
   }
 
