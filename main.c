@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
+#include "stdio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +48,20 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
+// サーボモーター制御用の変数
+#define SERVO_MIN_PULSE 500   // 0度: 0.5ms
+#define SERVO_MAX_PULSE 2400  // 270度: 2.4ms
+#define SERVO_ANGLE_MAX 270.0f
+
+CAN_FilterTypeDef can_filter;
+CAN_RxHeaderTypeDef rx_header;
+uint8_t rx_data[8];
+
+// CAN受信デバッグ用
+volatile uint8_t can_received_flag = 0;
+volatile uint32_t can_last_id = 0;
+volatile uint8_t can_last_data = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -58,10 +72,56 @@ static void MX_CAN_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
+void Servo_SetAngle(float angle);
+void CAN_FilterConfig(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+// CANフィルタ設定: ID 0x208のみ受信
+void CAN_FilterConfig(void) {
+  can_filter.FilterBank = 0;
+  can_filter.FilterMode = CAN_FILTERMODE_IDMASK;
+  can_filter.FilterScale = CAN_FILTERSCALE_32BIT;
+  can_filter.FilterIdHigh = (0x208 << 5);
+  can_filter.FilterIdLow = 0x0000;
+  can_filter.FilterMaskIdHigh = (0x7FF << 5);
+  can_filter.FilterMaskIdLow = 0x0000;
+  can_filter.FilterFIFOAssignment = CAN_RX_FIFO0;
+  can_filter.FilterActivation = CAN_FILTER_ENABLE;
+  can_filter.SlaveStartFilterBank = 14;
+
+  HAL_CAN_ConfigFilter(&hcan, &can_filter);
+}
+
+// サーボモーターの角度を設定 (0-270度)
+void Servo_SetAngle(float angle) {
+  if (angle < 0.0f) angle = 0.0f;
+  if (angle > SERVO_ANGLE_MAX) angle = SERVO_ANGLE_MAX;
+
+  uint32_t pulse = SERVO_MIN_PULSE + (uint32_t)((angle / SERVO_ANGLE_MAX) * (SERVO_MAX_PULSE - SERVO_MIN_PULSE));
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pulse);
+}
+
+// CAN RX割り込みハンドラ
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_param) {
+  if (HAL_CAN_GetRxMessage(hcan_param, CAN_RX_FIFO0, &rx_header, rx_data) == HAL_OK) {
+    // デバッグ情報を保存 (printfは割り込み内で使わない)
+    can_received_flag = 1;
+    can_last_id = rx_header.StdId;
+    can_last_data = rx_data[2];
+
+    // ID 0x208のメッセージを受信
+    if (rx_header.StdId == 0x208) {
+      // rx_data[2]でサーボモーターの角度を直接制御 (0-270度)
+      // 受信データを角度にマッピング: 0 -> 0度, 128 -> 135度, 255 -> 270度
+      float target_angle = (rx_data[2] / 255.0f) * SERVO_ANGLE_MAX;
+      Servo_SetAngle(target_angle);
+    }
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -98,16 +158,18 @@ int main(void)
   MX_CAN_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-  // CAN開始と受信通知有効化
-  if (HAL_CAN_Start(&hcan) != HAL_OK)
-  {
-    Error_Handler();
-  }
 
-  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  // CANフィルタ設定
+  CAN_FilterConfig();
+
+  // CAN開始と受信割り込み有効化
+  HAL_CAN_Start(&hcan);
+  HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
+
+  // PWM開始とサーボを初期位置へ (中央: 135度)
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  Servo_SetAngle(135.0f);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -117,6 +179,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // CAN受信時にデバッグ出力 (メインループで実行)
+    if (can_received_flag) {
+      can_received_flag = 0;
+      // printf("Received CAN ID: 0x%03lX Data: %02X\r\n", can_last_id, can_last_data);
+    }
   }
   /* USER CODE END 3 */
 }
@@ -129,6 +196,7 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -154,6 +222,12 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_TIM1;
+  PeriphClkInit.Tim1ClockSelection = RCC_TIM1CLK_HCLK;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
   }
@@ -191,23 +265,7 @@ static void MX_CAN_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN CAN_Init 2 */
-  // CANフィルタ設定: ID 0x208のみ受信
-  CAN_FilterTypeDef sFilterConfig;
-  sFilterConfig.FilterBank = 0;
-  sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
-  sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
-  sFilterConfig.FilterIdHigh = (0x208 << 5);
-  sFilterConfig.FilterIdLow = 0x0000;
-  sFilterConfig.FilterMaskIdHigh = (0x7FF << 5);
-  sFilterConfig.FilterMaskIdLow = 0x0000;
-  sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
-  sFilterConfig.FilterActivation = ENABLE;
-  sFilterConfig.SlaveStartFilterBank = 14;
 
-  if (HAL_CAN_ConfigFilter(&hcan, &sFilterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE END CAN_Init 2 */
 
 }
@@ -335,22 +393,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// // CAN受信コールバック関数
-void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
-{
-  CAN_RxHeaderTypeDef RxHeader;
-  uint8_t rx_data[8];
 
-  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, rx_data) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  if (RxHeader.StdId == 0x208)
-  {
-    printf("Received\n");
-  }
-}
 /* USER CODE END 4 */
 
 /**
