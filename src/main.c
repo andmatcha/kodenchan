@@ -138,7 +138,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_param) {
       }
     }
   }
-  printf("Received CAN ID: 0x%03X Data: %02X %02X\r\n",rx_header.StdId, rx_data[2]);
+  printf("Received CAN ID: 0x%03X Data: %02X\r\n",rx_header.StdId, rx_data[2]);
 }
 
 // TIM1割り込みハンドラ (20ms周期で角度を更新)
