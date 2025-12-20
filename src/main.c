@@ -224,7 +224,7 @@ int main(void)
     // CAN受信時にデバッグ出力 (メインループで実行)
     if (can_received_flag) {
       can_received_flag = 0;
-      // printf("Received CAN ID: 0x%03lX Data: %02X\r\n", can_last_id, can_last_data);
+      printf("Received CAN ID: 0x%03lX Data: %02X\r\n", can_last_id, can_last_data);
     }
   }
   /* USER CODE END 3 */
