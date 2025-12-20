@@ -363,30 +363,30 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (rx_data[2] == 0)
     {
       // PWM 270度方向
-      if (servo_duty <= SERVO_MAX_PULSE - 100)
+      if (servo_duty <= SERVO_MAX_PULSE - 20)
       {
-        servo_duty += 100;
+        servo_duty += 20;
       }
       else
       {
         servo_duty = SERVO_MAX_PULSE;
       }
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, servo_duty);
-      printf("PWM: %d\n", servo_duty);
+      //printf("PWM: %d\n", servo_duty);
     }
     else if (rx_data[2] == 2)
     {
       // PWM 0度方向
-      if (servo_duty >= SERVO_MIN_PULSE + 100)
+      if (servo_duty >= SERVO_MIN_PULSE + 20)
       {
-        servo_duty -= 100;
+        servo_duty -= 20;
       }
       else
       {
         servo_duty = SERVO_MIN_PULSE;
       }
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, servo_duty);
-      printf("PWM: %d\n", servo_duty);
+      //printf("PWM: %d\n", servo_duty);
     }
   }
 
