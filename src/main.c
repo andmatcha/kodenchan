@@ -149,6 +149,7 @@ int main(void)
           printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[2]);
       }
     }
+    HAL_Delay(10);
   }
   /* USER CODE END 3 */
 }
