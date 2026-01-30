@@ -205,12 +205,12 @@ static void MX_CAN_Init(void)
   // CANフィルタ設定: ID 0x208のみ受信
   CAN_FilterTypeDef sFilterConfig;
   sFilterConfig.FilterBank = 0;
-  sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+  sFilterConfig.FilterMode = CAN_FILTERMODE_IDLIST;
   sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
   sFilterConfig.FilterIdHigh = (0x208 << 5);
-  sFilterConfig.FilterIdLow = 0x0000;
-  sFilterConfig.FilterMaskIdHigh = (0x7FF << 5);
-  sFilterConfig.FilterMaskIdLow = 0x0000;
+  // sFilterConfig.FilterIdLow = 0x0000;
+  // sFilterConfig.FilterMaskIdHigh = (0x7FF << 5);
+  // sFilterConfig.FilterMaskIdLow = 0x0000;
   sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
   sFilterConfig.FilterActivation = ENABLE;
   sFilterConfig.SlaveStartFilterBank = 14;
@@ -326,6 +326,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PA0 PA1 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
@@ -340,6 +341,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : PB3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
@@ -349,6 +357,8 @@ static void MX_GPIO_Init(void)
 // // CAN受信コールバック関数
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
+  // PB_3のLEDを点灯
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, GPIO_PIN_SET);
   CAN_RxHeaderTypeDef RxHeader;
   uint8_t rx_data[8];
 
@@ -363,23 +373,23 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (rx_data[2] == 0)
     {
       // PWM 270度方向
-      if (servo_duty <= SERVO_MAX_PULSE - 20)
+      if (servo_duty <= SERVO_MAX_PULSE - 300)
       {
-        servo_duty += 20;
+        servo_duty += 300;
       }
       else
       {
         servo_duty = SERVO_MAX_PULSE;
       }
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, servo_duty);
-      //printf("PWM: %d\n", servo_duty);
+      // printf("PWM: %d\n", servo_duty);
     }
     else if (rx_data[2] == 2)
     {
       // PWM 0度方向
-      if (servo_duty >= SERVO_MIN_PULSE + 20)
+      if (servo_duty >= SERVO_MIN_PULSE + 300)
       {
-        servo_duty -= 20;
+        servo_duty -= 300;
       }
       else
       {
@@ -389,7 +399,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
       //printf("PWM: %d\n", servo_duty);
     }
   }
-
+  // PB_3のLEDを点灯
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, GPIO_PIN_RESET);
 }
 /* USER CODE END 4 */
 
