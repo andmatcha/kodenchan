@@ -199,17 +199,17 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
-  * @brief This function handles CAN TX interrupt.
+  * @brief This function handles USB low priority or CAN RX0 interrupts.
   */
-void CAN_TX_IRQHandler(void)
+void USB_LP_CAN_RX0_IRQHandler(void)
 {
-  /* USER CODE BEGIN CAN_TX_IRQn 0 */
+  /* USER CODE BEGIN USB_LP_CAN_RX0_IRQn 0 */
 
-  /* USER CODE END CAN_TX_IRQn 0 */
+  /* USER CODE END USB_LP_CAN_RX0_IRQn 0 */
   HAL_CAN_IRQHandler(&hcan);
-  /* USER CODE BEGIN CAN_TX_IRQn 1 */
+  /* USER CODE BEGIN USB_LP_CAN_RX0_IRQn 1 */
 
-  /* USER CODE END CAN_TX_IRQn 1 */
+  /* USER CODE END USB_LP_CAN_RX0_IRQn 1 */
 }
 
 /* USER CODE BEGIN 1 */

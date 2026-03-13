@@ -32,6 +32,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define CAN_RX_TARGET_STDID 0x123U
+#define UART_TX_BUFFER_SIZE 256U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,7 +46,9 @@ CAN_HandleTypeDef hcan;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+static volatile uint8_t uartTxBuffer[UART_TX_BUFFER_SIZE];
+static volatile uint16_t uartTxHead = 0U;
+static volatile uint16_t uartTxTail = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -55,7 +58,8 @@ static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
 static void CAN_Filter_Init(void);
-static void UART_PrintCanData(const CAN_RxHeaderTypeDef *rx_header, const uint8_t *rx_data);
+static void UART_QueueBytes(const uint8_t *data, uint32_t length);
+static void UART_TryTransmit(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -81,13 +85,36 @@ static void CAN_Filter_Init(void)
   }
 }
 
-static void UART_PrintCanData(const CAN_RxHeaderTypeDef *rx_header, const uint8_t *rx_data)
+static void UART_QueueBytes(const uint8_t *data, uint32_t length)
 {
+  uint16_t nextHead;
   uint32_t i;
 
-  for (i = 0; i < rx_header->DLC && i < 8U; ++i)
+  for (i = 0; i < length; ++i)
   {
-    HAL_UART_Transmit(&huart2, (uint8_t *)&rx_data[i], 1, HAL_MAX_DELAY);
+    nextHead = (uint16_t)((uartTxHead + 1U) % UART_TX_BUFFER_SIZE);
+
+    if (nextHead == uartTxTail)
+    {
+      break;
+    }
+
+    uartTxBuffer[uartTxHead] = data[i];
+    uartTxHead = nextHead;
+  }
+}
+
+static void UART_TryTransmit(void)
+{
+  if (uartTxHead == uartTxTail)
+  {
+    return;
+  }
+
+  if (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_TXE) == SET)
+  {
+    huart2.Instance->TDR = uartTxBuffer[uartTxTail];
+    uartTxTail = (uint16_t)((uartTxTail + 1U) % UART_TX_BUFFER_SIZE);
   }
 }
 /* USER CODE END 0 */
@@ -98,9 +125,6 @@ static void UART_PrintCanData(const CAN_RxHeaderTypeDef *rx_header, const uint8_
  */
 int main(void)
 {
-  CAN_RxHeaderTypeDef rxHeader;
-  uint8_t rxData[8];
-
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -133,7 +157,11 @@ int main(void)
     printf("CAN Start failed\r\n");
     Error_Handler();
   }
-  printf("Waiting CAN ID 0x123...\r\n");
+  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK)
+  {
+    printf("CAN notification failed\r\n");
+    Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -143,21 +171,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (HAL_CAN_GetRxFifoFillLevel(&hcan, CAN_RX_FIFO0) == 0U)
-    {
-      continue;
-    }
-
-    if (HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
-    {
-      printf("CAN Receive failed\r\n");
-      Error_Handler();
-    }
-
-    if ((rxHeader.IDE == CAN_ID_STD) && (rxHeader.StdId == CAN_RX_TARGET_STDID))
-    {
-      UART_PrintCanData(&rxHeader, rxData);
-    }
+    UART_TryTransmit();
   }
   /* USER CODE END 3 */
 }
@@ -307,6 +321,21 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *canHandle)
+{
+  CAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
+
+  if (HAL_CAN_GetRxMessage(canHandle, CAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
+  {
+    return;
+  }
+
+  if ((rxHeader.IDE == CAN_ID_STD) && (rxHeader.StdId == CAN_RX_TARGET_STDID))
+  {
+    UART_QueueBytes(rxData, rxHeader.DLC);
+  }
+}
 /* USER CODE END 4 */
 
 /**
