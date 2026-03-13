@@ -31,7 +31,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define CAN_RX_TARGET_STDID 0x123U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,12 +54,42 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void CAN_Filter_Init(void);
+static void UART_PrintCanData(const CAN_RxHeaderTypeDef *rx_header, const uint8_t *rx_data);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void CAN_Filter_Init(void)
+{
+  CAN_FilterTypeDef filter = {0};
 
+  filter.FilterBank = 0;
+  filter.FilterMode = CAN_FILTERMODE_IDMASK;
+  filter.FilterScale = CAN_FILTERSCALE_32BIT;
+  filter.FilterIdHigh = (uint16_t)(CAN_RX_TARGET_STDID << 5);
+  filter.FilterIdLow = 0U;
+  filter.FilterMaskIdHigh = (uint16_t)(0x7FFU << 5);
+  filter.FilterMaskIdLow = 0U;
+  filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
+  filter.FilterActivation = ENABLE;
+  filter.SlaveStartFilterBank = 14;
+
+  if (HAL_CAN_ConfigFilter(&hcan, &filter) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+static void UART_PrintCanData(const CAN_RxHeaderTypeDef *rx_header, const uint8_t *rx_data)
+{
+  uint32_t i;
+
+  for (i = 0; i < rx_header->DLC && i < 8U; ++i)
+  {
+    HAL_UART_Transmit(&huart2, (uint8_t *)&rx_data[i], 1, HAL_MAX_DELAY);
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -68,6 +98,8 @@ static void MX_CAN_Init(void);
  */
 int main(void)
 {
+  CAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
 
   /* USER CODE BEGIN 1 */
 
@@ -94,25 +126,14 @@ int main(void)
   MX_USART2_UART_Init();
   MX_CAN_Init();
   /* USER CODE BEGIN 2 */
+  CAN_Filter_Init();
+
   if (HAL_CAN_Start(&hcan) != HAL_OK)
   {
     printf("CAN Start failed\r\n");
     Error_Handler();
   }
-  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_TX_MAILBOX_EMPTY))
-  {
-    printf("CAN ActivateNotification failed\r\n");
-    Error_Handler();
-  }
-  CAN_TxHeaderTypeDef TxHeader; // 送信するCANフレームのヘッダ(メタデータを格納)
-  uint8_t TxData[8];            // 送信するデータ本体（最大8バイト）
-  uint32_t TxMailbox;           // 送信バッファ番号
-
-  TxHeader.StdId = 0x200;                // 任意のID
-  TxHeader.IDE = CAN_ID_STD;             // 標準ID
-  TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
-  TxHeader.DLC = 8;                      // データ長
-  TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
+  printf("Waiting CAN ID 0x123...\r\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -122,98 +143,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-    // TxData[0] = 0x01;
-    // if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    // {
-    //   printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    // }
-    // else
-    // {
-    //   printf("failed\r\n");
-    // }
-    // HAL_Delay(500);
-
-    // 正回転処理
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
+    if (HAL_CAN_GetRxFifoFillLevel(&hcan, CAN_RX_FIFO0) == 0U)
     {
-      TxHeader.StdId = 0x200;
-      TxData[4] = 10000;
-      TxData[5] = 10000;
-      if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      {
-        printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[4]);
-        printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[5]);
-      }
-
-      // for (int i = 0; i < 4; i++)
-      // {
-      //   TxHeader.StdId = 0x200;
-      //   TxData[i * 2] = 10000 >> 8;
-      //   TxData[i * 2 + 1] = 10000;
-      //   if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      //   {
-      //     printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-      //     printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-      //   }
-      // }
-    //   for (int i = 0; i < 4; i++)
-    //   {
-    //     TxHeader.StdId = 0x1FF;
-    //     TxData[i * 2] = 10000 >> 8;
-    //     TxData[i * 2 + 1] = 10000;
-    //     if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    //     {
-    //       printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-    //       printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-    //     }
-    //   }
+      continue;
     }
-    // 逆回転処理
-    else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
+
+    if (HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
     {
-      TxHeader.StdId = 0x200;
-      TxData[4] = -10000;
-      TxData[5] = -10000;
-      if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      {
-        printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[4]);
-        printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[5]);
-      }
-      // for (int i = 0; i < 4; i++)
-      // {
-      //   TxData[i * 2] = -10000 >> 8;
-      //   TxData[i * 2 + 1] = -10000;
-      //   if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      //   {
-      //     printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-      //     printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-      //   }
-      // }
-      // TxHeader.StdId = 0x1FF;
-      // for (int i = 0; i < 4; i++)
-      // {
-      //   TxData[i * 2] = -10000 >> 8;
-      //   TxData[i * 2 + 1] = -10000;
-      //   if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      //   {
-      //     printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-      //     printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-      //   }
-      // }
+      printf("CAN Receive failed\r\n");
+      Error_Handler();
     }
-    // 停止処理
-    else
+
+    if ((rxHeader.IDE == CAN_ID_STD) && (rxHeader.StdId == CAN_RX_TARGET_STDID))
     {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = 0;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[STOP] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-        }
-      }
+      UART_PrintCanData(&rxHeader, rxData);
     }
   }
   /* USER CODE END 3 */
@@ -274,7 +217,6 @@ static void MX_CAN_Init(void)
   hcan.Instance = CAN;
   hcan.Init.Prescaler = 3;
   hcan.Init.Mode = CAN_MODE_NORMAL;
-  // hcan.Init.Mode = CAN_MODE_LOOPBACK; // ループバック
   hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
   hcan.Init.TimeSeg1 = CAN_BS1_9TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
@@ -365,23 +307,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Mailbox0
-void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox0 TX complete\r\n");
-}
-
-// Mailbox1
-void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox1 TX complete\r\n");
-}
-
-// Mailbox2
-void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox2 TX complete\r\n");
-}
 /* USER CODE END 4 */
 
 /**
