@@ -33,6 +33,8 @@
 /* USER CODE BEGIN PD */
 #define CAN_RX_TARGET_STDID 0x123U
 #define UART_TX_BUFFER_SIZE 256U
+#define STATUS_LED_GPIO_Port GPIOA
+#define STATUS_LED_Pin GPIO_PIN_5
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,6 +51,7 @@ UART_HandleTypeDef huart2;
 static volatile uint8_t uartTxBuffer[UART_TX_BUFFER_SIZE];
 static volatile uint16_t uartTxHead = 0U;
 static volatile uint16_t uartTxTail = 0U;
+static uint8_t uartRxByte = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -60,6 +63,7 @@ static void MX_CAN_Init(void);
 static void CAN_Filter_Init(void);
 static void UART_QueueBytes(const uint8_t *data, uint32_t length);
 static void UART_TryTransmit(void);
+static void UART_StartReceiveIT(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -117,6 +121,14 @@ static void UART_TryTransmit(void)
     uartTxTail = (uint16_t)((uartTxTail + 1U) % UART_TX_BUFFER_SIZE);
   }
 }
+
+static void UART_StartReceiveIT(void)
+{
+  if (HAL_UART_Receive_IT(&huart2, &uartRxByte, 1U) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -162,6 +174,8 @@ int main(void)
     printf("CAN notification failed\r\n");
     Error_Handler();
   }
+
+  UART_StartReceiveIT();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -265,7 +279,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 38400;
+  huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -334,6 +348,15 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *canHandle)
   if ((rxHeader.IDE == CAN_ID_STD) && (rxHeader.StdId == CAN_RX_TARGET_STDID))
   {
     UART_QueueBytes(rxData, rxHeader.DLC);
+  }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uartHandle)
+{
+  if (uartHandle->Instance == USART2)
+  {
+    HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin, GPIO_PIN_SET);
+    UART_StartReceiveIT();
   }
 }
 /* USER CODE END 4 */
