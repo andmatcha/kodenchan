@@ -33,8 +33,9 @@
 /* USER CODE BEGIN PD */
 #define CAN_RX_TARGET_STDID 0x123U
 #define UART_TX_BUFFER_SIZE 256U
-#define STATUS_LED_GPIO_Port GPIOA
-#define STATUS_LED_Pin GPIO_PIN_5
+#define STATUS_LED_HOLD_MS 300U
+#define STATUS_LED_GPIO_Port GPIOB
+#define STATUS_LED_Pin GPIO_PIN_3
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -51,6 +52,7 @@ UART_HandleTypeDef huart2;
 static volatile uint8_t uartTxBuffer[UART_TX_BUFFER_SIZE];
 static volatile uint16_t uartTxHead = 0U;
 static volatile uint16_t uartTxTail = 0U;
+static volatile uint32_t uartLedOffTick = 0U;
 static uint8_t uartRxByte = 0U;
 /* USER CODE END PV */
 
@@ -186,6 +188,12 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     UART_TryTransmit();
+
+    if ((uartLedOffTick != 0U) && ((int32_t)(HAL_GetTick() - uartLedOffTick) >= 0))
+    {
+      HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin, GPIO_PIN_RESET);
+      uartLedOffTick = 0U;
+    }
   }
   /* USER CODE END 3 */
 }
@@ -312,9 +320,10 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PA0 PA1 */
   GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
@@ -322,12 +331,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  /*Configure GPIO pin : PB3 */
+  GPIO_InitStruct.Pin = STATUS_LED_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(STATUS_LED_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -356,6 +365,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uartHandle)
   if (uartHandle->Instance == USART2)
   {
     HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin, GPIO_PIN_SET);
+    uartLedOffTick = HAL_GetTick() + STATUS_LED_HOLD_MS;
     UART_StartReceiveIT();
   }
 }
