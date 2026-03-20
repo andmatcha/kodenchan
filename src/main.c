@@ -32,6 +32,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define CAN_RX_TARGET_STDID 0x123U
+#define CAN_TX_STDID CAN_RX_TARGET_STDID
+#define UART_RX_BUFFER_SIZE 256U
 #define UART_TX_BUFFER_SIZE 256U
 #define STATUS_LED_HOLD_MS 300U
 #define STATUS_LED_GPIO_Port GPIOB
@@ -49,6 +51,9 @@ CAN_HandleTypeDef hcan;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+static volatile uint8_t uartRxBuffer[UART_RX_BUFFER_SIZE];
+static volatile uint16_t uartRxHead = 0U;
+static volatile uint16_t uartRxTail = 0U;
 static volatile uint8_t uartTxBuffer[UART_TX_BUFFER_SIZE];
 static volatile uint16_t uartTxHead = 0U;
 static volatile uint16_t uartTxTail = 0U;
@@ -63,6 +68,8 @@ static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
 static void CAN_Filter_Init(void);
+static void CAN_TryTransmitQueuedUart(void);
+static void UART_QueueReceivedByte(uint8_t data);
 static void UART_QueueBytes(const uint8_t *data, uint32_t length);
 static void UART_TryTransmit(void);
 static void UART_StartReceiveIT(void);
@@ -88,6 +95,63 @@ static void CAN_Filter_Init(void)
   if (HAL_CAN_ConfigFilter(&hcan, &filter) != HAL_OK)
   {
     Error_Handler();
+  }
+}
+
+static void CAN_TryTransmitQueuedUart(void)
+{
+  CAN_TxHeaderTypeDef txHeader = {0};
+  uint8_t txData[8];
+  uint16_t tailSnapshot;
+  uint16_t headSnapshot;
+  uint32_t mailbox;
+  uint32_t count = 0U;
+
+  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0U)
+  {
+    return;
+  }
+
+  __disable_irq();
+  tailSnapshot = uartRxTail;
+  headSnapshot = uartRxHead;
+
+  while ((tailSnapshot != headSnapshot) && (count < sizeof(txData)))
+  {
+    txData[count] = uartRxBuffer[tailSnapshot];
+    tailSnapshot = (uint16_t)((tailSnapshot + 1U) % UART_RX_BUFFER_SIZE);
+    ++count;
+  }
+  __enable_irq();
+
+  if (count == 0U)
+  {
+    return;
+  }
+
+  txHeader.StdId = CAN_TX_STDID;
+  txHeader.ExtId = 0U;
+  txHeader.IDE = CAN_ID_STD;
+  txHeader.RTR = CAN_RTR_DATA;
+  txHeader.DLC = (uint32_t)count;
+  txHeader.TransmitGlobalTime = DISABLE;
+
+  if (HAL_CAN_AddTxMessage(&hcan, &txHeader, txData, &mailbox) == HAL_OK)
+  {
+    __disable_irq();
+    uartRxTail = (uint16_t)((uartRxTail + count) % UART_RX_BUFFER_SIZE);
+    __enable_irq();
+  }
+}
+
+static void UART_QueueReceivedByte(uint8_t data)
+{
+  uint16_t nextHead = (uint16_t)((uartRxHead + 1U) % UART_RX_BUFFER_SIZE);
+
+  if (nextHead != uartRxTail)
+  {
+    uartRxBuffer[uartRxHead] = data;
+    uartRxHead = nextHead;
   }
 }
 
@@ -187,6 +251,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    CAN_TryTransmitQueuedUart();
     UART_TryTransmit();
 
     if ((uartLedOffTick != 0U) && ((int32_t)(HAL_GetTick() - uartLedOffTick) >= 0))
@@ -364,6 +429,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uartHandle)
 {
   if (uartHandle->Instance == USART2)
   {
+    UART_QueueReceivedByte(uartRxByte);
     HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin, GPIO_PIN_SET);
     uartLedOffTick = HAL_GetTick() + STATUS_LED_HOLD_MS;
     UART_StartReceiveIT();
