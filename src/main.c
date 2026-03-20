@@ -298,23 +298,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Mailbox0
-void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox0 TX complete\r\n");
-}
 
-// Mailbox1
-void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox1 TX complete\r\n");
-}
-
-// Mailbox2
-void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox2 TX complete\r\n");
-}
 /* USER CODE END 4 */
 
 /**
