@@ -107,8 +107,9 @@ int main(void)
   CAN_TxHeaderTypeDef TxHeader; // 送信するCANフレームのヘッダ(メタデータを格納)
   uint8_t TxData[8];            // 送信するデータ本体（最大8バイト）
   uint32_t TxMailbox;           // 送信バッファ番号
+  int16_t control_data;
 
-  TxHeader.StdId = 0x208;                // 任意のID
+  TxHeader.StdId = 0x1FF;                // 任意のID
   TxHeader.IDE = CAN_ID_STD;             // 標準ID
   TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
   TxHeader.DLC = 8;                      // データ長
@@ -124,30 +125,27 @@ int main(void)
     /* USER CODE BEGIN 3 */
     if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
     {
-      TxData[0] = 0;
-      TxData[1] = 0;
-      TxData[2] = 0;
-      if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      {
-          printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[2]);
-      }
-    } else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
+      control_data = -1;
+    }
+    else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
     {
-      TxData[0] = 0;
-      TxData[1] = 0;
-      TxData[2] = 2;
-      if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      {
-          printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[2]);
-      }
-    } else {
-      TxData[0] = 0;
-      TxData[1] = 0;
-      TxData[2] = 1;
-      if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-      {
-          printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[2]);
-      }
+      control_data = 1;
+    }
+    else
+    {
+      control_data = 0;
+    }
+
+    for (uint8_t i = 0; i < TxHeader.DLC; i++)
+    {
+      TxData[i] = 0;
+    }
+    TxData[4] = (uint8_t)((uint16_t)control_data >> 8);
+    TxData[5] = (uint8_t)control_data;
+
+    if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
+    {
+      printf("CAN Transmit: ID=0x%03lx, DATA=%d\r\n", (unsigned long)TxHeader.StdId, control_data);
     }
     HAL_Delay(10);
   }
