@@ -31,6 +31,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define CAN_RX_FREQUENCY_LOG_INTERVAL_MS 1000U
 
 /* USER CODE END PD */
 
@@ -45,6 +46,8 @@ CAN_HandleTypeDef hcan;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+static volatile uint32_t can_rx_frame_count = 0;
+static uint32_t can_rx_log_last_tick_ms = 0;
 
 /* USER CODE END PV */
 
@@ -54,11 +57,48 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
+static void LogCanRxFrequency(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void LogCanRxFrequency(void)
+{
+  uint32_t now = HAL_GetTick();
+  uint32_t elapsed_ms = now - can_rx_log_last_tick_ms;
+
+  if (elapsed_ms < CAN_RX_FREQUENCY_LOG_INTERVAL_MS)
+  {
+    return;
+  }
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  uint32_t rx_count = can_rx_frame_count;
+  can_rx_frame_count = 0;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+
+  can_rx_log_last_tick_ms = now;
+
+  uint32_t rx_rate_hz = 0;
+  uint32_t rx_rate_frac = 0;
+  if (elapsed_ms > 0U)
+  {
+    uint32_t scaled_rx_count = rx_count * 1000U;
+    rx_rate_hz = scaled_rx_count / elapsed_ms;
+    rx_rate_frac = ((scaled_rx_count % elapsed_ms) * 100U) / elapsed_ms;
+  }
+
+  printf("CAN RX FREQ: %lu frame(s)/%lums (%lu.%02lu Hz)\r\n",
+         (unsigned long)rx_count,
+         (unsigned long)elapsed_ms,
+         (unsigned long)rx_rate_hz,
+         (unsigned long)rx_rate_frac);
+}
 
 /* USER CODE END 0 */
 
@@ -113,6 +153,7 @@ int main(void)
   TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
   TxHeader.DLC = 8;                      // データ長
   TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
+  can_rx_log_last_tick_ms = HAL_GetTick();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -122,6 +163,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    LogCanRxFrequency();
 
     // TxData[0] = 0x01;
     // if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
@@ -377,6 +419,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   uint8_t rxData[8];
   if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK)
   {
+    can_rx_frame_count++;
     if (rxHeader.IDE == CAN_ID_STD)
     {
       printf("CAN RX: StdId=0x%03lX DLC=%lu Data:", (unsigned long)rxHeader.StdId, (unsigned long)rxHeader.DLC);
