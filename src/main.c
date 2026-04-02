@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "stdio.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,7 +31,14 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define CAN_CHUNK_SIZE 8U
+#define ROVER_CAN_BASE_ID 0x300U
+#define ARM_CAN_BASE_ID 0x310U
+#define ROVER_PERIOD_MS 100U
+#define ARM_PERIOD_MS 50U
+#define CAN_TX_TIMEOUT_MS 10U
+#define ROVER_DUMMY_BUFFER_SIZE 64U
+#define ARM_DUMMY_FRAME_SIZE 16U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,7 +52,8 @@ CAN_HandleTypeDef hcan;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+static uint32_t rover_sequence = 0U;
+static uint32_t arm_sequence = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -54,7 +62,13 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
-
+static HAL_StatusTypeDef CAN_SendBytes(uint16_t std_id, const uint8_t *data, uint8_t len);
+static HAL_StatusTypeDef CAN_SendChunked(uint16_t base_id, const uint8_t *data, uint8_t len);
+static uint8_t BuildRoverDummyFrame(uint8_t *buffer, size_t buffer_size, uint32_t sequence);
+static void BuildArmDummyFrame(uint8_t *buffer, uint32_t sequence);
+static void LogRoverPayload(const uint8_t *data, uint8_t len);
+static void LogArmPayload(const uint8_t *data, uint8_t len);
+static void ServiceDummyCanTraffic(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -99,20 +113,6 @@ int main(void)
     printf("CAN Start failed\r\n");
     Error_Handler();
   }
-  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_TX_MAILBOX_EMPTY))
-  {
-    printf("CAN ActivateNotification failed\r\n");
-    Error_Handler();
-  }
-  CAN_TxHeaderTypeDef TxHeader; // 送信するCANフレームのヘッダ(メタデータを格納)
-  uint8_t TxData[8];            // 送信するデータ本体（最大8バイト）
-  uint32_t TxMailbox;           // 送信バッファ番号
-
-  TxHeader.StdId = 0x200;                // 任意のID
-  TxHeader.IDE = CAN_ID_STD;             // 標準ID
-  TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
-  TxHeader.DLC = 8;                      // データ長
-  TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -122,83 +122,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-    // TxData[0] = 0x01;
-    // if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    // {
-    //   printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    // }
-    // else
-    // {
-    //   printf("failed\r\n");
-    // }
-    // HAL_Delay(500);
-
-    // 正回転処理
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
-    {
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x200;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x1FF;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-    }
-    // 逆回転処理
-    else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
-    {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      TxHeader.StdId = 0x1FF;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-    }
-    // 停止処理
-    else
-    {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = 0;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[STOP] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-        }
-      }
-    }
+    ServiceDummyCanTraffic();
+    HAL_Delay(1);
   }
   /* USER CODE END 3 */
 }
@@ -349,22 +274,177 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Mailbox0
-void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan)
+static HAL_StatusTypeDef CAN_SendBytes(uint16_t std_id, const uint8_t *data, uint8_t len)
 {
-  printf("CAN Mailbox0 TX complete\r\n");
+  CAN_TxHeaderTypeDef tx_header = {0};
+  uint32_t tx_mailbox = 0U;
+  uint32_t start_tick = HAL_GetTick();
+
+  while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0U)
+  {
+    if ((HAL_GetTick() - start_tick) >= CAN_TX_TIMEOUT_MS)
+    {
+      return HAL_TIMEOUT;
+    }
+  }
+
+  tx_header.StdId = std_id;
+  tx_header.IDE = CAN_ID_STD;
+  tx_header.RTR = CAN_RTR_DATA;
+  tx_header.DLC = len;
+  tx_header.TransmitGlobalTime = DISABLE;
+
+  return HAL_CAN_AddTxMessage(&hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
 }
 
-// Mailbox1
-void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
+static HAL_StatusTypeDef CAN_SendChunked(uint16_t base_id, const uint8_t *data, uint8_t len)
 {
-  printf("CAN Mailbox1 TX complete\r\n");
+  uint8_t offset = 0U;
+  uint16_t frame_id = base_id;
+
+  while (offset < len)
+  {
+    HAL_StatusTypeDef status = HAL_OK;
+    uint8_t chunk_len = len - offset;
+
+    if (chunk_len > CAN_CHUNK_SIZE)
+    {
+      chunk_len = CAN_CHUNK_SIZE;
+    }
+
+    status = CAN_SendBytes(frame_id, &data[offset], chunk_len);
+    if (status != HAL_OK)
+    {
+      return status;
+    }
+
+    offset += chunk_len;
+    frame_id++;
+  }
+
+  return HAL_OK;
 }
 
-// Mailbox2
-void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
+static uint8_t BuildRoverDummyFrame(uint8_t *buffer, size_t buffer_size, uint32_t sequence)
 {
-  printf("CAN Mailbox2 TX complete\r\n");
+  int written = 0;
+  size_t payload_len = 0U;
+  uint32_t rover_id = ROVER_CAN_BASE_ID + (sequence % 4U);
+  uint32_t rover_value = (sequence * 123456U) % 1000000U;
+
+  written = snprintf((char *)buffer,
+                     buffer_size,
+                     "0x%03lX, %06lu",
+                     (unsigned long)rover_id,
+                     (unsigned long)rover_value);
+
+  if (written < 0)
+  {
+    return 0U;
+  }
+
+  payload_len = (size_t)written;
+  if (payload_len > (buffer_size - 2U))
+  {
+    payload_len = buffer_size - 2U;
+  }
+
+  buffer[payload_len++] = '\n';
+  buffer[payload_len++] = '\r';
+
+  return (uint8_t)payload_len;
+}
+
+static void BuildArmDummyFrame(uint8_t *buffer, uint32_t sequence)
+{
+  uint8_t index = 0U;
+
+  buffer[0] = 'J';
+  buffer[1] = 'F';
+
+  for (index = 2U; index < ARM_DUMMY_FRAME_SIZE; index++)
+  {
+    buffer[index] = (uint8_t)(sequence + (uint32_t)(index * 13U));
+  }
+}
+
+static void LogRoverPayload(const uint8_t *data, uint8_t len)
+{
+  uint8_t index = 0U;
+
+  printf("Rover payload: \"");
+  for (index = 0U; index < len; index++)
+  {
+    if (data[index] == '\n')
+    {
+      printf("\\n");
+    }
+    else if (data[index] == '\r')
+    {
+      printf("\\r");
+    }
+    else
+    {
+      printf("%c", data[index]);
+    }
+  }
+  printf("\"\r\n");
+}
+
+static void LogArmPayload(const uint8_t *data, uint8_t len)
+{
+  uint8_t index = 0U;
+
+  printf("Arm payload:");
+  for (index = 0U; index < len; index++)
+  {
+    printf(" %02X", data[index]);
+  }
+  printf("\r\n");
+}
+
+static void ServiceDummyCanTraffic(void)
+{
+  static uint32_t last_rover_tick = 0U;
+  static uint32_t last_arm_tick = 0U;
+  uint32_t now = HAL_GetTick();
+
+  if ((last_rover_tick == 0U) || ((now - last_rover_tick) >= ROVER_PERIOD_MS))
+  {
+    uint8_t rover_payload[ROVER_DUMMY_BUFFER_SIZE];
+    uint8_t rover_length = BuildRoverDummyFrame(rover_payload, sizeof(rover_payload), rover_sequence);
+
+    if ((rover_length > 0U) &&
+        (CAN_SendChunked(ROVER_CAN_BASE_ID, rover_payload, rover_length) == HAL_OK))
+    {
+      LogRoverPayload(rover_payload, rover_length);
+      rover_sequence++;
+    }
+    else
+    {
+      printf("Rover dummy send failed\r\n");
+    }
+
+    last_rover_tick = now;
+  }
+
+  if ((last_arm_tick == 0U) || ((now - last_arm_tick) >= ARM_PERIOD_MS))
+  {
+    uint8_t arm_payload[ARM_DUMMY_FRAME_SIZE];
+
+    BuildArmDummyFrame(arm_payload, arm_sequence);
+    if (CAN_SendChunked(ARM_CAN_BASE_ID, arm_payload, sizeof(arm_payload)) == HAL_OK)
+    {
+      LogArmPayload(arm_payload, sizeof(arm_payload));
+      arm_sequence++;
+    }
+    else
+    {
+      printf("Arm dummy send failed\r\n");
+    }
+
+    last_arm_tick = now;
+  }
 }
 /* USER CODE END 4 */
 
