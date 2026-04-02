@@ -54,7 +54,9 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void CAN_SendMockArmData(uint16_t e0, uint16_t e1, uint8_t flags,
+                                uint16_t e2, uint16_t e3, uint16_t e4);
+static void CAN_SendMockRoverData(uint16_t id300, uint16_t id400, uint8_t base);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -99,98 +101,41 @@ int main(void)
     printf("CAN Start failed\r\n");
     Error_Handler();
   }
-  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_TX_MAILBOX_EMPTY))
-  {
-    printf("CAN ActivateNotification failed\r\n");
-    Error_Handler();
-  }
-  CAN_TxHeaderTypeDef TxHeader; // 送信するCANフレームのヘッダ(メタデータを格納)
-  uint8_t TxData[8];            // 送信するデータ本体（最大8バイト）
-  uint32_t TxMailbox;           // 送信バッファ番号
-
-  TxHeader.StdId = 0x200;                // 任意のID
-  TxHeader.IDE = CAN_ID_STD;             // 標準ID
-  TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
-  TxHeader.DLC = 8;                      // データ長
-  TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
+  uint16_t arm_base = 0;
+  uint8_t rover_base = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      uint16_t e0 = 1000 + arm_base;
+      uint16_t e1 = 2000 + arm_base;
+      uint16_t e2 = 3000 + arm_base;
+      uint16_t e3 = 4000 + arm_base;
+      uint16_t e4 = 5000 + arm_base;
+      uint8_t flags = 0x01; // READY
+
+      CAN_SendMockArmData(e0, e1, flags, e2, e3, e4);
+
+      CAN_SendMockRoverData(0x301, 0x401, rover_base);
+
+      arm_base += 10;
+      if (arm_base > 1000)
+      {
+        arm_base = 0;
+      }
+
+      rover_base += 1;
+
+      HAL_Delay(100);
+
+  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
 
-    // TxData[0] = 0x01;
-    // if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    // {
-    //   printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    // }
-    // else
-    // {
-    //   printf("failed\r\n");
-    // }
-    // HAL_Delay(500);
-
-    // 正回転処理
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
-    {
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x200;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x1FF;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-
-      HAL_Delay(1000);
-    }
-    // 逆回転処理
-    else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
-    {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      TxHeader.StdId = 0x1FF;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-
-      HAL_Delay(1000);
-    }
-  }
+    
   /* USER CODE END 3 */
 }
 
@@ -340,22 +285,100 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Mailbox0
-void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan)
+static void CAN_WaitTxComplete(CAN_HandleTypeDef *hcan, uint32_t mailbox)
 {
-  printf("CAN Mailbox0 TX complete\r\n");
+  while (HAL_CAN_IsTxMessagePending(hcan, mailbox))
+  {
+  }
 }
 
-// Mailbox1
-void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
+static void CAN_SendFrame(CAN_HandleTypeDef *hcan, uint16_t std_id, const uint8_t data[8])
 {
-  printf("CAN Mailbox1 TX complete\r\n");
+  CAN_TxHeaderTypeDef TxHeader;
+  uint32_t TxMailbox;
+
+  TxHeader.StdId = std_id;
+  TxHeader.IDE = CAN_ID_STD;
+  TxHeader.RTR = CAN_RTR_DATA;
+  TxHeader.DLC = 8;
+  TxHeader.TransmitGlobalTime = DISABLE;
+
+  if (HAL_CAN_AddTxMessage(hcan, &TxHeader, (uint8_t *)data, &TxMailbox) != HAL_OK)
+  {
+    printf("TX failed: ID=0x%03X\r\n", std_id);
+    Error_Handler();
+  }
+
+  CAN_WaitTxComplete(hcan, TxMailbox);
 }
 
-// Mailbox2
-void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
+static void CAN_SendMockArmData(uint16_t e0, uint16_t e1, uint8_t flags,
+                                uint16_t e2, uint16_t e3, uint16_t e4)
 {
-  printf("CAN Mailbox2 TX complete\r\n");
+  uint8_t data203[8] = {0};
+  uint8_t data204[8] = {0};
+
+  // ID 0x203
+  data203[0] = (uint8_t)(e0 & 0xFF);
+  data203[1] = (uint8_t)((e0 >> 8) & 0xFF);
+  data203[2] = (uint8_t)(e1 & 0xFF);
+  data203[3] = (uint8_t)((e1 >> 8) & 0xFF);
+  data203[4] = (uint8_t)(flags & 0x3F);
+  data203[5] = 0x00;
+  data203[6] = 0x00;
+  data203[7] = 0x00;
+
+  // ID 0x204
+  data204[0] = (uint8_t)(e2 & 0xFF);
+  data204[1] = (uint8_t)((e2 >> 8) & 0xFF);
+  data204[2] = (uint8_t)(e3 & 0xFF);
+  data204[3] = (uint8_t)((e3 >> 8) & 0xFF);
+  data204[4] = (uint8_t)(e4 & 0xFF);
+  data204[5] = (uint8_t)((e4 >> 8) & 0xFF);
+  data204[6] = 0x00;
+  data204[7] = 0x00;
+
+  CAN_SendFrame(&hcan, 0x203, data203);
+  CAN_SendFrame(&hcan, 0x204, data204);
+
+  printf("ARM mock: 0x203/0x204 sent\r\n");
+}
+
+static void CAN_SendMockRoverData(uint16_t id300, uint16_t id400, uint8_t base)
+{
+  uint8_t data300[8];
+  uint8_t data400[8];
+
+  // 0x300番台の適当データ
+  data300[0] = base + 0;
+  data300[1] = base + 1;
+  data300[2] = base + 2;
+  data300[3] = base + 3;
+  data300[4] = base + 4;
+  data300[5] = base + 5;
+  data300[6] = base + 6;
+  data300[7] = base + 7;
+
+  // 0x400番台の適当データ
+  data400[0] = base + 10;
+  data400[1] = base + 11;
+  data400[2] = base + 12;
+  data400[3] = base + 13;
+  data400[4] = base + 14;
+  data400[5] = base + 15;
+  data400[6] = base + 16;
+  data400[7] = base + 17;
+
+  CAN_SendFrame(&hcan, id300, data300);
+  CAN_SendFrame(&hcan, id400, data400);
+
+  printf("ROVER mock: ID=0x%03X sum=%u, ID=0x%03X sum=%u\r\n",
+         id300,
+         data300[0] + data300[1] + data300[2] + data300[3] +
+         data300[4] + data300[5] + data300[6] + data300[7],
+         id400,
+         data400[0] + data400[1] + data400[2] + data400[3] +
+         data400[4] + data400[5] + data400[6] + data400[7]);
 }
 /* USER CODE END 4 */
 
