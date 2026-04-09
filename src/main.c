@@ -82,6 +82,7 @@ static bool ExtractACPacket(uint8_t *packet, uint32_t *packet_length, bool allow
 static void LoadPacketAC(PacketAC_v3 *packet, const uint8_t *raw_packet);
 static void TransmitPacketAsCan(const PacketAC_v3 *packet);
 static HAL_StatusTypeDef SendCanFrame(uint16_t std_id, const uint8_t *data);
+static void PrintCanTxLine(uint16_t std_id, const uint8_t *data);
 
 /* USER CODE END PFP */
 
@@ -96,6 +97,18 @@ static void WriteU16LE(uint8_t *data, uint16_t value)
 {
   data[0] = (uint8_t)(value & 0xFFU);
   data[1] = (uint8_t)((value >> 8) & 0xFFU);
+}
+
+static void PrintCanTxLine(uint16_t std_id, const uint8_t *data)
+{
+  printf("CAN TX 0x%03X:", std_id);
+
+  for (uint32_t i = 0; i < 8U; ++i)
+  {
+    printf(" %02X", data[i]);
+  }
+
+  printf("\r\n");
 }
 
 static uint16_t CRC16CcittFalse(const uint8_t *data, uint32_t length)
@@ -256,6 +269,7 @@ static HAL_StatusTypeDef SendCanFrame(uint16_t std_id, const uint8_t *data)
   CAN_TxHeaderTypeDef tx_header = {0};
   uint32_t tx_mailbox = 0U;
   uint32_t start_tick = HAL_GetTick();
+  HAL_StatusTypeDef status = HAL_OK;
 
   tx_header.StdId = std_id;
   tx_header.IDE = CAN_ID_STD;
@@ -271,7 +285,13 @@ static HAL_StatusTypeDef SendCanFrame(uint16_t std_id, const uint8_t *data)
     }
   }
 
-  return HAL_CAN_AddTxMessage(&hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
+  status = HAL_CAN_AddTxMessage(&hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
+  if (status == HAL_OK)
+  {
+    PrintCanTxLine(std_id, data);
+  }
+
+  return status;
 }
 
 static void TransmitManualPacket(const PacketAC_v3 *packet)
