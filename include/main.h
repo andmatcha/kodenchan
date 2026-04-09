@@ -53,7 +53,6 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-int UART_AsyncWrite(const uint8_t *data, uint16_t length);
 
 /* USER CODE END EFP */
 
