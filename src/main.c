@@ -43,9 +43,12 @@ typedef struct
 /* USER CODE BEGIN PD */
 #define AC_PACKET_V3_LEN 31U
 #define AC_PACKET_V6_LEN 39U
-#define AC_STREAM_BUFFER_LEN 96U
-#define UART_RX_TIMEOUT_MS 1U
+#define AC_STREAM_BUFFER_LEN 256U
 #define SHORT_PACKET_IDLE_MS 3U
+#define UART_BRIDGE_BAUD_RATE 115200U
+#define UART_DMA_RX_BUFFER_LEN 256U
+#define UART_TX_BUFFER_LEN 1024U
+#define UART_TX_WRITE_TIMEOUT_MS 50U
 
 #define MODE_MANUAL 1U
 
@@ -63,17 +66,28 @@ typedef struct
 CAN_HandleTypeDef hcan;
 
 UART_HandleTypeDef huart2;
+DMA_HandleTypeDef hdma_usart2_rx;
+DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
 static uint8_t uart_stream_buffer[AC_STREAM_BUFFER_LEN];
 static uint32_t uart_stream_length = 0U;
 static uint32_t last_uart_rx_tick = 0U;
+static uint8_t uart_dma_rx_buffer[UART_DMA_RX_BUFFER_LEN];
+static volatile uint16_t uart_dma_rx_read_index = 0U;
+static uint8_t uart_tx_buffer[UART_TX_BUFFER_LEN];
+static volatile uint16_t uart_tx_head = 0U;
+static volatile uint16_t uart_tx_tail = 0U;
+static volatile uint16_t uart_tx_dma_length = 0U;
+static volatile uint8_t uart_tx_dma_active = 0U;
+static volatile uint8_t uart_async_ready = 0U;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
@@ -83,6 +97,15 @@ static void LoadPacketAC(PacketAC_v3 *packet, const uint8_t *raw_packet);
 static void TransmitPacketAsCan(const PacketAC_v3 *packet);
 static HAL_StatusTypeDef SendCanFrame(uint16_t std_id, const uint8_t *data);
 static void PrintCanTxLine(uint16_t std_id, const uint8_t *data);
+static void UART_AsyncInit(void);
+static void PumpUartRxDma(void);
+static void UART_RxRestart(void);
+static uint32_t EnterCriticalSection(void);
+static void ExitCriticalSection(uint32_t primask);
+static uint16_t GetUartTxFreeLocked(void);
+static uint16_t EnqueueUartTxLocked(const uint8_t *data, uint16_t length);
+static void StartUartTxDmaLocked(void);
+static void ShiftStreamBuffer(uint32_t count);
 
 /* USER CODE END PFP */
 
@@ -109,6 +132,199 @@ static void PrintCanTxLine(uint16_t std_id, const uint8_t *data)
   }
 
   printf("\r\n");
+}
+
+static uint32_t EnterCriticalSection(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  return primask;
+}
+
+static void ExitCriticalSection(uint32_t primask)
+{
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+}
+
+static uint16_t GetUartTxFreeLocked(void)
+{
+  if (uart_tx_head >= uart_tx_tail)
+  {
+    return (uint16_t)((UART_TX_BUFFER_LEN - (uart_tx_head - uart_tx_tail)) - 1U);
+  }
+
+  return (uint16_t)((uart_tx_tail - uart_tx_head) - 1U);
+}
+
+static uint16_t EnqueueUartTxLocked(const uint8_t *data, uint16_t length)
+{
+  uint16_t free_space = GetUartTxFreeLocked();
+  uint16_t copy_length = (length < free_space) ? length : free_space;
+  uint16_t first_chunk = copy_length;
+
+  if (copy_length == 0U)
+  {
+    return 0U;
+  }
+
+  if ((uart_tx_head + first_chunk) > UART_TX_BUFFER_LEN)
+  {
+    first_chunk = (uint16_t)(UART_TX_BUFFER_LEN - uart_tx_head);
+  }
+
+  memcpy(&uart_tx_buffer[uart_tx_head], data, first_chunk);
+
+  if (copy_length > first_chunk)
+  {
+    memcpy(uart_tx_buffer, data + first_chunk, copy_length - first_chunk);
+  }
+
+  uart_tx_head = (uint16_t)((uart_tx_head + copy_length) % UART_TX_BUFFER_LEN);
+  return copy_length;
+}
+
+static void StartUartTxDmaLocked(void)
+{
+  uint16_t transfer_length = 0U;
+
+  if ((uart_async_ready == 0U) || (uart_tx_dma_active != 0U))
+  {
+    return;
+  }
+
+  if (uart_tx_head == uart_tx_tail)
+  {
+    return;
+  }
+
+  if (uart_tx_head > uart_tx_tail)
+  {
+    transfer_length = (uint16_t)(uart_tx_head - uart_tx_tail);
+  }
+  else
+  {
+    transfer_length = (uint16_t)(UART_TX_BUFFER_LEN - uart_tx_tail);
+  }
+
+  uart_tx_dma_length = transfer_length;
+  uart_tx_dma_active = 1U;
+
+  if (HAL_UART_Transmit_DMA(&huart2, &uart_tx_buffer[uart_tx_tail], transfer_length) != HAL_OK)
+  {
+    uart_tx_dma_length = 0U;
+    uart_tx_dma_active = 0U;
+  }
+}
+
+int UART_AsyncWrite(const uint8_t *data, uint16_t length)
+{
+  uint16_t written = 0U;
+  uint32_t start_tick = HAL_GetTick();
+
+  if ((data == NULL) || (length == 0U))
+  {
+    return 0;
+  }
+
+  if (uart_async_ready == 0U)
+  {
+    if (HAL_UART_Transmit(&huart2, (uint8_t *)data, length, HAL_MAX_DELAY) == HAL_OK)
+    {
+      return (int)length;
+    }
+
+    return 0;
+  }
+
+  while (written < length)
+  {
+    uint32_t primask = EnterCriticalSection();
+    written += EnqueueUartTxLocked(data + written, (uint16_t)(length - written));
+    StartUartTxDmaLocked();
+    ExitCriticalSection(primask);
+
+    if (written >= length)
+    {
+      break;
+    }
+
+    if ((HAL_GetTick() - start_tick) >= UART_TX_WRITE_TIMEOUT_MS)
+    {
+      break;
+    }
+  }
+
+  return (int)written;
+}
+
+static void UART_AsyncInit(void)
+{
+  uart_stream_length = 0U;
+  last_uart_rx_tick = 0U;
+  uart_dma_rx_read_index = 0U;
+  uart_tx_head = 0U;
+  uart_tx_tail = 0U;
+  uart_tx_dma_length = 0U;
+  uart_tx_dma_active = 0U;
+  uart_async_ready = 0U;
+
+  if (HAL_UART_Receive_DMA(&huart2, uart_dma_rx_buffer, UART_DMA_RX_BUFFER_LEN) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
+  __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_TC);
+
+  uart_async_ready = 1U;
+}
+
+static void UART_RxRestart(void)
+{
+  if (HAL_UART_AbortReceive(&huart2) != HAL_OK)
+  {
+    return;
+  }
+
+  __HAL_UART_CLEAR_OREFLAG(&huart2);
+  uart_dma_rx_read_index = 0U;
+
+  if (HAL_UART_Receive_DMA(&huart2, uart_dma_rx_buffer, UART_DMA_RX_BUFFER_LEN) == HAL_OK)
+  {
+    __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
+    __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_TC);
+  }
+}
+
+static void PumpUartRxDma(void)
+{
+  uint16_t write_index = 0U;
+
+  if ((uart_async_ready == 0U) || (huart2.hdmarx == NULL))
+  {
+    return;
+  }
+
+  write_index = (uint16_t)(UART_DMA_RX_BUFFER_LEN - __HAL_DMA_GET_COUNTER(huart2.hdmarx));
+  if (write_index >= UART_DMA_RX_BUFFER_LEN)
+  {
+    write_index = 0U;
+  }
+
+  while (uart_dma_rx_read_index != write_index)
+  {
+    if (uart_stream_length >= AC_STREAM_BUFFER_LEN)
+    {
+      ShiftStreamBuffer(1U);
+    }
+
+    uart_stream_buffer[uart_stream_length++] = uart_dma_rx_buffer[uart_dma_rx_read_index];
+    uart_dma_rx_read_index = (uint16_t)((uart_dma_rx_read_index + 1U) % UART_DMA_RX_BUFFER_LEN);
+    last_uart_rx_tick = HAL_GetTick();
+  }
 }
 
 static uint16_t CRC16CcittFalse(const uint8_t *data, uint32_t length)
@@ -226,20 +442,11 @@ static bool ExtractACPacket(uint8_t *packet, uint32_t *packet_length, bool allow
 
 static bool PollACPacket(uint8_t *packet, uint32_t *packet_length)
 {
-  uint8_t byte = 0U;
-  HAL_StatusTypeDef status = HAL_UART_Receive(&huart2, &byte, 1U, UART_RX_TIMEOUT_MS);
+  PumpUartRxDma();
 
-  if (status == HAL_OK)
+  if (ExtractACPacket(packet, packet_length, false))
   {
-    if (uart_stream_length >= AC_STREAM_BUFFER_LEN)
-    {
-      ShiftStreamBuffer(1U);
-    }
-
-    uart_stream_buffer[uart_stream_length++] = byte;
-    last_uart_rx_tick = HAL_GetTick();
-
-    return ExtractACPacket(packet, packet_length, false);
+    return true;
   }
 
   if ((uart_stream_length >= AC_PACKET_V3_LEN) &&
@@ -362,7 +569,9 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
+  UART_AsyncInit();
   MX_CAN_Init();
   /* USER CODE BEGIN 2 */
   if (HAL_CAN_Start(&hcan) != HAL_OK)
@@ -370,7 +579,7 @@ int main(void)
     printf("CAN Start failed\r\n");
     Error_Handler();
   }
-  printf("Bridge ready: USART2 57600 -> CAN 1Mbps\r\n");
+  printf("Bridge ready: USART2 %lu DMA -> CAN 1Mbps\r\n", (unsigned long)UART_BRIDGE_BAUD_RATE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -417,7 +626,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL16;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -425,13 +634,14 @@ void SystemClock_Config(void)
 
   /** Initializes the CPU, AHB and APB buses clocks
    */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -453,11 +663,10 @@ static void MX_CAN_Init(void)
 
   /* USER CODE END CAN_Init 1 */
   hcan.Instance = CAN;
-  hcan.Init.Prescaler = 3;
+  hcan.Init.Prescaler = 4;
   hcan.Init.Mode = CAN_MODE_NORMAL;
-  // hcan.Init.Mode = CAN_MODE_LOOPBACK; // ループバック
   hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
-  hcan.Init.TimeSeg1 = CAN_BS1_9TQ;
+  hcan.Init.TimeSeg1 = CAN_BS1_5TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
   hcan.Init.TimeTriggeredMode = DISABLE;
   hcan.Init.AutoBusOff = DISABLE;
@@ -490,7 +699,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 57600;
+  huart2.Init.BaudRate = UART_BRIDGE_BAUD_RATE;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -506,6 +715,25 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
+}
+
+/**
+ * Enable DMA controller clock
+ */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel6_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel6_IRQn);
+  /* DMA1_Channel7_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel7_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel7_IRQn);
+
 }
 
 /**
@@ -528,9 +756,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PA0 PA1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PA5 */
@@ -546,6 +774,40 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart != &huart2)
+  {
+    return;
+  }
+
+  {
+    uint32_t primask = EnterCriticalSection();
+    uart_tx_tail = (uint16_t)((uart_tx_tail + uart_tx_dma_length) % UART_TX_BUFFER_LEN);
+    uart_tx_dma_length = 0U;
+    uart_tx_dma_active = 0U;
+    StartUartTxDmaLocked();
+    ExitCriticalSection(primask);
+  }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart != &huart2)
+  {
+    return;
+  }
+
+  UART_RxRestart();
+
+  {
+    uint32_t primask = EnterCriticalSection();
+    uart_tx_dma_active = 0U;
+    uart_tx_dma_length = 0U;
+    StartUartTxDmaLocked();
+    ExitCriticalSection(primask);
+  }
+}
 /* USER CODE END 4 */
 
 /**
@@ -559,8 +821,6 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
-    printf("Error occurred!\r\n");
-    HAL_Delay(1000);
   }
   /* USER CODE END Error_Handler_Debug */
 }

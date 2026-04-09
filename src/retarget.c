@@ -1,4 +1,4 @@
-#include "stm32f3xx_hal.h"
+#include "main.h"
 #include <stdio.h>
 #include <unistd.h>
 
@@ -9,6 +9,6 @@ extern UART_HandleTypeDef huart2;
 // _write: printfが内部で呼ぶシステム関数の一部
 int _write(int file, char *ptr, int len)
 {
-  HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
-  return len;
+  (void)file;
+  return UART_AsyncWrite((const uint8_t *)ptr, (uint16_t)len);
 }
