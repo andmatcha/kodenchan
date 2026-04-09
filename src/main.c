@@ -21,16 +21,36 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "stdio.h"
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct
+{
+  uint8_t seq;
+  uint8_t flags;
+  uint16_t current[7];
+  uint8_t extra_flags;
+} PacketAC_v3;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define AC_PACKET_V3_LEN 31U
+#define AC_PACKET_V6_LEN 39U
+#define AC_STREAM_BUFFER_LEN 96U
+#define UART_RX_TIMEOUT_MS 1U
+#define SHORT_PACKET_IDLE_MS 3U
+
+#define MODE_MANUAL 1U
+
+#define MANUAL_UPLINK_CANID_1 0x200U
+#define MANUAL_UPLINK_CANID_2 0x201U
 
 /* USER CODE END PD */
 
@@ -45,6 +65,9 @@ CAN_HandleTypeDef hcan;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+static uint8_t uart_stream_buffer[AC_STREAM_BUFFER_LEN];
+static uint32_t uart_stream_length = 0U;
+static uint32_t last_uart_rx_tick = 0U;
 
 /* USER CODE END PV */
 
@@ -54,11 +77,239 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
+static bool PollACPacket(uint8_t *packet, uint32_t *packet_length);
+static bool ExtractACPacket(uint8_t *packet, uint32_t *packet_length, bool allow_short_packet);
+static void LoadPacketAC(PacketAC_v3 *packet, const uint8_t *raw_packet);
+static void TransmitPacketAsCan(const PacketAC_v3 *packet);
+static HAL_StatusTypeDef SendCanFrame(uint16_t std_id, const uint8_t *data);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static uint16_t ReadU16LE(const uint8_t *data)
+{
+  return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+}
+
+static void WriteU16LE(uint8_t *data, uint16_t value)
+{
+  data[0] = (uint8_t)(value & 0xFFU);
+  data[1] = (uint8_t)((value >> 8) & 0xFFU);
+}
+
+static uint16_t CRC16CcittFalse(const uint8_t *data, uint32_t length)
+{
+  uint16_t crc = 0xFFFFU;
+
+  for (uint32_t i = 0; i < length; ++i)
+  {
+    crc ^= (uint16_t)data[i] << 8;
+
+    for (uint32_t bit = 0; bit < 8; ++bit)
+    {
+      if ((crc & 0x8000U) != 0U)
+      {
+        crc = (uint16_t)((crc << 1) ^ 0x1021U);
+      }
+      else
+      {
+        crc <<= 1;
+      }
+    }
+  }
+
+  return crc;
+}
+
+static void ShiftStreamBuffer(uint32_t count)
+{
+  if (count >= uart_stream_length)
+  {
+    uart_stream_length = 0U;
+    return;
+  }
+
+  memmove(uart_stream_buffer, uart_stream_buffer + count, uart_stream_length - count);
+  uart_stream_length -= count;
+}
+
+static bool StreamHasHeader(void)
+{
+  for (uint32_t i = 0; i + 1U < uart_stream_length; ++i)
+  {
+    if ((uart_stream_buffer[i] == 'A') && (uart_stream_buffer[i + 1U] == 'C'))
+    {
+      if (i != 0U)
+      {
+        ShiftStreamBuffer(i);
+      }
+      return true;
+    }
+  }
+
+  if (uart_stream_length > 1U)
+  {
+    uint8_t tail = uart_stream_buffer[uart_stream_length - 1U];
+    uart_stream_buffer[0] = tail;
+    uart_stream_length = (tail == 'A') ? 1U : 0U;
+  }
+
+  return false;
+}
+
+static bool PacketHasValidV6Crc(const uint8_t *packet)
+{
+  uint16_t expected_crc = ReadU16LE(packet + (AC_PACKET_V6_LEN - 2U));
+  uint16_t actual_crc = CRC16CcittFalse(packet, AC_PACKET_V6_LEN - 2U);
+  return expected_crc == actual_crc;
+}
+
+static bool ExtractACPacket(uint8_t *packet, uint32_t *packet_length, bool allow_short_packet)
+{
+  while (uart_stream_length >= 2U)
+  {
+    if (!StreamHasHeader())
+    {
+      return false;
+    }
+
+    if (uart_stream_length < AC_PACKET_V3_LEN)
+    {
+      return false;
+    }
+
+    if ((uart_stream_length >= AC_PACKET_V6_LEN) && PacketHasValidV6Crc(uart_stream_buffer))
+    {
+      memcpy(packet, uart_stream_buffer, AC_PACKET_V6_LEN);
+      *packet_length = AC_PACKET_V6_LEN;
+      ShiftStreamBuffer(AC_PACKET_V6_LEN);
+      return true;
+    }
+
+    if ((uart_stream_length >= (AC_PACKET_V3_LEN + 2U)) &&
+        (uart_stream_buffer[AC_PACKET_V3_LEN] == 'A') &&
+        (uart_stream_buffer[AC_PACKET_V3_LEN + 1U] == 'C'))
+    {
+      memcpy(packet, uart_stream_buffer, AC_PACKET_V3_LEN);
+      *packet_length = AC_PACKET_V3_LEN;
+      ShiftStreamBuffer(AC_PACKET_V3_LEN);
+      return true;
+    }
+
+    if (allow_short_packet)
+    {
+      memcpy(packet, uart_stream_buffer, AC_PACKET_V3_LEN);
+      *packet_length = AC_PACKET_V3_LEN;
+      ShiftStreamBuffer(AC_PACKET_V3_LEN);
+      return true;
+    }
+
+    return false;
+  }
+
+  return false;
+}
+
+static bool PollACPacket(uint8_t *packet, uint32_t *packet_length)
+{
+  uint8_t byte = 0U;
+  HAL_StatusTypeDef status = HAL_UART_Receive(&huart2, &byte, 1U, UART_RX_TIMEOUT_MS);
+
+  if (status == HAL_OK)
+  {
+    if (uart_stream_length >= AC_STREAM_BUFFER_LEN)
+    {
+      ShiftStreamBuffer(1U);
+    }
+
+    uart_stream_buffer[uart_stream_length++] = byte;
+    last_uart_rx_tick = HAL_GetTick();
+
+    return ExtractACPacket(packet, packet_length, false);
+  }
+
+  if ((uart_stream_length >= AC_PACKET_V3_LEN) &&
+      ((HAL_GetTick() - last_uart_rx_tick) >= SHORT_PACKET_IDLE_MS))
+  {
+    return ExtractACPacket(packet, packet_length, true);
+  }
+
+  return false;
+}
+
+static void LoadPacketAC(PacketAC_v3 *packet, const uint8_t *raw_packet)
+{
+  packet->seq = raw_packet[2];
+  packet->flags = raw_packet[3];
+
+  for (uint32_t i = 0; i < 7U; ++i)
+  {
+    packet->current[i] = ReadU16LE(raw_packet + 4U + (i * 2U));
+  }
+
+  packet->extra_flags = raw_packet[30];
+}
+
+static HAL_StatusTypeDef SendCanFrame(uint16_t std_id, const uint8_t *data)
+{
+  CAN_TxHeaderTypeDef tx_header = {0};
+  uint32_t tx_mailbox = 0U;
+  uint32_t start_tick = HAL_GetTick();
+
+  tx_header.StdId = std_id;
+  tx_header.IDE = CAN_ID_STD;
+  tx_header.RTR = CAN_RTR_DATA;
+  tx_header.DLC = 8U;
+  tx_header.TransmitGlobalTime = DISABLE;
+
+  while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0U)
+  {
+    if ((HAL_GetTick() - start_tick) > 10U)
+    {
+      return HAL_TIMEOUT;
+    }
+  }
+
+  return HAL_CAN_AddTxMessage(&hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
+}
+
+static void TransmitManualPacket(const PacketAC_v3 *packet)
+{
+  uint8_t frame[8] = {0};
+
+  WriteU16LE(&frame[0], packet->current[0]);
+  WriteU16LE(&frame[2], packet->current[1]);
+  WriteU16LE(&frame[4], packet->current[2]);
+  WriteU16LE(&frame[6], packet->current[3]);
+  if (SendCanFrame(MANUAL_UPLINK_CANID_1, frame) != HAL_OK)
+  {
+    printf("Failed CAN TX: 0x%03X\r\n", MANUAL_UPLINK_CANID_1);
+  }
+
+  memset(frame, 0, sizeof(frame));
+  WriteU16LE(&frame[0], packet->current[4]);
+  WriteU16LE(&frame[2], packet->current[5]);
+  WriteU16LE(&frame[4], packet->current[6]);
+  frame[6] = packet->extra_flags;
+  if (SendCanFrame(MANUAL_UPLINK_CANID_2, frame) != HAL_OK)
+  {
+    printf("Failed CAN TX: 0x%03X\r\n", MANUAL_UPLINK_CANID_2);
+  }
+}
+
+static void TransmitPacketAsCan(const PacketAC_v3 *packet)
+{
+  uint8_t mode = (packet->flags >> 4) & 0x03U;
+
+  if (mode == MODE_MANUAL)
+  {
+    TransmitManualPacket(packet);
+    return;
+  }
+
+  printf("Ignored non-manual mode: %u\r\n", mode);
+}
 
 /* USER CODE END 0 */
 
@@ -99,20 +350,7 @@ int main(void)
     printf("CAN Start failed\r\n");
     Error_Handler();
   }
-  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_TX_MAILBOX_EMPTY))
-  {
-    printf("CAN ActivateNotification failed\r\n");
-    Error_Handler();
-  }
-  CAN_TxHeaderTypeDef TxHeader; // 送信するCANフレームのヘッダ(メタデータを格納)
-  uint8_t TxData[8];            // 送信するデータ本体（最大8バイト）
-  uint32_t TxMailbox;           // 送信バッファ番号
-
-  TxHeader.StdId = 0x200;                // 任意のID
-  TxHeader.IDE = CAN_ID_STD;             // 標準ID
-  TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
-  TxHeader.DLC = 8;                      // データ長
-  TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
+  printf("Bridge ready: USART2 57600 -> CAN 1Mbps\r\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -122,74 +360,22 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint8_t raw_packet[AC_PACKET_V6_LEN] = {0};
+    uint32_t raw_packet_length = 0U;
+    PacketAC_v3 packet = {0};
 
-    // TxData[0] = 0x01;
-    // if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    // {
-    //   printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    // }
-    // else
-    // {
-    //   printf("failed\r\n");
-    // }
-    // HAL_Delay(500);
-
-    // 正回転処理
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
+    if (!PollACPacket(raw_packet, &raw_packet_length))
     {
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x200;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x1FF;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-
-      HAL_Delay(1000);
+      continue;
     }
-    // 逆回転処理
-    else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
+
+    if ((raw_packet[0] != 'A') || (raw_packet[1] != 'C'))
     {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      TxHeader.StdId = 0x1FF;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-
-      HAL_Delay(1000);
+      continue;
     }
+
+    LoadPacketAC(&packet, raw_packet);
+    TransmitPacketAsCan(&packet);
   }
   /* USER CODE END 3 */
 }
@@ -284,7 +470,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 38400;
+  huart2.Init.BaudRate = 57600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -340,23 +526,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Mailbox0
-void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox0 TX complete\r\n");
-}
-
-// Mailbox1
-void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox1 TX complete\r\n");
-}
-
-// Mailbox2
-void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox2 TX complete\r\n");
-}
 /* USER CODE END 4 */
 
 /**
