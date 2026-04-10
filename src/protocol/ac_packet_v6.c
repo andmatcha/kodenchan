@@ -1,6 +1,6 @@
 /*
  * 責務: PacketACv6 の header / CRC 検証と little endian field decode を行う。
- * 依存関係: protocol/ac_stream_parser から raw packet を受け、services/ac_direct_arm_service へ mode 判定可能な AcPacketV6 を返す。
+ * 依存関係: protocol/ac_stream_parser から raw packet を受け、services/uart_packet_to_can_service へ mode 判定可能な AcPacketV6 を返す。
  */
 
 #include "protocol/ac_packet_v6.h"

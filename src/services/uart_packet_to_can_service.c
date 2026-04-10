@@ -1,9 +1,9 @@
 /*
- * 責務: UARTで受けた PacketACv6 manual 入力を直接アーム制御CANへ変換して送信する。
+ * 責務: UARTで受けたmanual packetをアーム制御CANへ変換して送信する。
  * 依存関係: app の init/poll から呼ばれ、drivers / protocol / control の隣接レイヤーを接続してCAN送信まで進める。
  */
 
-#include "services/ac_direct_arm_service.h"
+#include "services/uart_packet_to_can_service.h"
 
 #include "control/arm_control.h"
 #include "control/arm_state.h"
@@ -34,7 +34,7 @@ static void handle_can_feedback(uint16_t std_id, const uint8_t data[8], void *co
   arm_state_handle_can_feedback(state, std_id, data);
 }
 
-static void drain_uart_stream(bool feed_parser)
+static void read_uart_stream(bool feed_parser)
 {
   uint8_t rx_data[SERVICE_UART_READ_CHUNK_LEN];
   uint16_t received = 0U;
@@ -51,10 +51,10 @@ static void drain_uart_stream(bool feed_parser)
 
 static void pump_uart_stream(void)
 {
-  drain_uart_stream(true);
+  read_uart_stream(true);
 }
 
-static void consume_ac_packets(uint32_t now_ms)
+static void consume_uart_packets(uint32_t now_ms)
 {
   AcPacketV6 packet;
 
@@ -109,7 +109,7 @@ static void run_control_period(uint32_t now_ms)
   }
 }
 
-void ac_direct_arm_service_init(CAN_HandleTypeDef *hcan, UART_HandleTypeDef *huart)
+void uart_packet_to_can_service_init(CAN_HandleTypeDef *hcan, UART_HandleTypeDef *huart)
 {
   uart_async_init(huart);
   can_bus_init(hcan);
@@ -120,23 +120,23 @@ void ac_direct_arm_service_init(CAN_HandleTypeDef *hcan, UART_HandleTypeDef *hua
   s_last_control_tick = HAL_GetTick();
 }
 
-void ac_direct_arm_service_discard_input(void)
+void uart_packet_to_can_service_reset_input(void)
 {
   uint32_t now_ms = HAL_GetTick();
 
-  drain_uart_stream(false);
+  read_uart_stream(false);
   ac_stream_parser_init(&s_parser);
   manual_input_force_neutral(&s_manual_snapshot, now_ms);
   arm_control_init(&s_pid);
   s_last_control_tick = now_ms;
 }
 
-void ac_direct_arm_service_poll(void)
+void uart_packet_to_can_service_poll(void)
 {
   uint32_t now_ms = HAL_GetTick();
 
   pump_uart_stream();
-  consume_ac_packets(now_ms);
+  consume_uart_packets(now_ms);
   can_bus_poll(handle_can_feedback, &s_arm_state);
 
   if (control_period_elapsed(now_ms))

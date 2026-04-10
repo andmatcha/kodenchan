@@ -33,9 +33,9 @@ typedef struct
 static const ButtonCanTxConfig s_configs[BUTTON_CAN_TX_CONFIG_COUNT] = BUTTON_CAN_TX_CONFIGS;
 static ButtonCanTxState s_states[BUTTON_CAN_TX_CONFIG_COUNT];
 static uint32_t s_last_poll_at_ms = 0U;
-static bool s_combo_active = false;
-static bool s_combo_toggle_reported = false;
-static bool s_combo_release_blocked = false;
+static bool s_combo_holding = false;
+static bool s_combo_toggled = false;
+static bool s_combo_wait_release = false;
 static uint32_t s_combo_started_at_ms = 0U;
 
 static void enable_gpio_clock(GPIO_TypeDef *gpio_port)
@@ -144,7 +144,7 @@ static bool button_is_active(const ButtonCanTxConfig *config, const ButtonCanTxS
   return state->initialized && (state->stable_state == config->active_state);
 }
 
-static bool combo_buttons_are_active(void)
+static bool combo_both_pressed(void)
 {
 #if BUTTON_CAN_TX_CONFIG_COUNT >= 2U
   return button_is_active(&s_configs[0], &s_states[0]) &&
@@ -154,7 +154,7 @@ static bool combo_buttons_are_active(void)
 #endif
 }
 
-static bool combo_button_is_active(void)
+static bool combo_any_pressed(void)
 {
 #if BUTTON_CAN_TX_CONFIG_COUNT >= 2U
   return button_is_active(&s_configs[0], &s_states[0]) ||
@@ -164,26 +164,26 @@ static bool combo_button_is_active(void)
 #endif
 }
 
-static bool poll_combo_toggle(bool combo_active, uint32_t now_ms)
+static bool update_combo_toggle(bool combo_pressed, uint32_t now_ms)
 {
-  if (!combo_active)
+  if (!combo_pressed)
   {
-    s_combo_active = false;
-    s_combo_toggle_reported = false;
+    s_combo_holding = false;
+    s_combo_toggled = false;
     s_combo_started_at_ms = now_ms;
     return false;
   }
 
-  if (!s_combo_active)
+  if (!s_combo_holding)
   {
-    s_combo_active = true;
-    s_combo_toggle_reported = false;
+    s_combo_holding = true;
+    s_combo_toggled = false;
     s_combo_started_at_ms = now_ms;
   }
 
-  if (!s_combo_toggle_reported && ((now_ms - s_combo_started_at_ms) >= BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS))
+  if (!s_combo_toggled && ((now_ms - s_combo_started_at_ms) >= BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS))
   {
-    s_combo_toggle_reported = true;
+    s_combo_toggled = true;
     return true;
   }
 
@@ -225,17 +225,17 @@ void button_can_tx_service_init(void)
   }
 
   s_last_poll_at_ms = now_ms;
-  s_combo_active = false;
-  s_combo_toggle_reported = false;
-  s_combo_release_blocked = false;
+  s_combo_holding = false;
+  s_combo_toggled = false;
+  s_combo_wait_release = false;
   s_combo_started_at_ms = now_ms;
 }
 
-bool button_can_tx_service_poll(bool can_tx_enabled)
+bool button_can_tx_service_poll(bool tx_enabled)
 {
   uint32_t now_ms = HAL_GetTick();
   bool stable_changed[BUTTON_CAN_TX_CONFIG_COUNT] = {false};
-  bool combo_active = false;
+  bool combo_pressed = false;
   bool combo_toggle_requested = false;
   bool tx_blocked = false;
 
@@ -251,20 +251,20 @@ bool button_can_tx_service_poll(bool can_tx_enabled)
     stable_changed[i] = update_button_state(&s_configs[i], &s_states[i], now_ms);
   }
 
-  combo_active = combo_buttons_are_active();
-  combo_toggle_requested = poll_combo_toggle(combo_active, now_ms);
-  if (combo_active)
+  combo_pressed = combo_both_pressed();
+  combo_toggle_requested = update_combo_toggle(combo_pressed, now_ms);
+  if (combo_pressed)
   {
-    s_combo_release_blocked = true;
+    s_combo_wait_release = true;
   }
-  else if (!combo_button_is_active())
+  else if (!combo_any_pressed())
   {
-    s_combo_release_blocked = false;
+    s_combo_wait_release = false;
   }
 
-  tx_blocked = combo_active || s_combo_release_blocked;
+  tx_blocked = combo_pressed || s_combo_wait_release;
 
-  if (!can_tx_enabled || tx_blocked)
+  if (!tx_enabled || tx_blocked)
   {
     return combo_toggle_requested;
   }

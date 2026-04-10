@@ -1,6 +1,6 @@
 /*
  * 責務: UART DMA circular RX と DMA TX ring を提供する。
- * 依存関係: HAL UART/DMA を下位層として使い、services/ac_direct_arm_service へ受信byte列、retarget から送信byte列を受け渡す。
+ * 依存関係: HAL UART/DMA を下位層として使い、services/uart_packet_to_can_service へ受信byte列、retarget から送信byte列を受け渡す。
  */
 
 #include "drivers/uart_async.h"

@@ -145,7 +145,7 @@ static HAL_StatusTypeDef configure_normal_filters(void)
                           CAN_FILTER_ENABLE);
 }
 
-static HAL_StatusTypeDef configure_accept_all_filter(void)
+static HAL_StatusTypeDef configure_all_id_filter(void)
 {
   HAL_StatusTypeDef status = HAL_OK;
 
@@ -179,16 +179,16 @@ void can_bus_init(CAN_HandleTypeDef *hcan)
   }
 }
 
-HAL_StatusTypeDef can_bus_set_accept_all_filter(bool accept_all)
+HAL_StatusTypeDef can_bus_set_rx_all_ids(bool enabled)
 {
   if (s_hcan == 0)
   {
     return HAL_ERROR;
   }
 
-  if (accept_all)
+  if (enabled)
   {
-    return configure_accept_all_filter();
+    return configure_all_id_filter();
   }
 
   return configure_normal_filters();
@@ -287,7 +287,7 @@ void can_bus_poll(CanBusRxCallback callback, void *context)
   poll_rx(callback, context, false);
 }
 
-void can_bus_poll_print_rx(void)
+void can_bus_log_rx(void)
 {
   poll_rx(0, 0, true);
 }
