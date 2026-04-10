@@ -34,7 +34,7 @@ static void handle_can_feedback(uint16_t std_id, const uint8_t data[8], void *co
   arm_state_handle_can_feedback(state, std_id, data);
 }
 
-static void pump_uart_stream(void)
+static void drain_uart_stream(bool feed_parser)
 {
   uint8_t rx_data[SERVICE_UART_READ_CHUNK_LEN];
   uint16_t received = 0U;
@@ -42,11 +42,16 @@ static void pump_uart_stream(void)
   do
   {
     received = uart_async_read(rx_data, sizeof(rx_data));
-    if (received > 0U)
+    if (feed_parser && (received > 0U))
     {
       ac_stream_parser_push(&s_parser, rx_data, received);
     }
   } while (received == sizeof(rx_data));
+}
+
+static void pump_uart_stream(void)
+{
+  drain_uart_stream(true);
 }
 
 static void consume_ac_packets(uint32_t now_ms)
@@ -113,6 +118,17 @@ void ac_direct_arm_service_init(CAN_HandleTypeDef *hcan, UART_HandleTypeDef *hua
   arm_state_init(&s_arm_state);
   arm_control_init(&s_pid);
   s_last_control_tick = HAL_GetTick();
+}
+
+void ac_direct_arm_service_discard_input(void)
+{
+  uint32_t now_ms = HAL_GetTick();
+
+  drain_uart_stream(false);
+  ac_stream_parser_init(&s_parser);
+  manual_input_force_neutral(&s_manual_snapshot, now_ms);
+  arm_control_init(&s_pid);
+  s_last_control_tick = now_ms;
 }
 
 void ac_direct_arm_service_poll(void)
