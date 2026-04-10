@@ -13,3 +13,4 @@ EWARM/
 MDK-ARM/
 STM32CubeIDE/
 .DS_Store
+.settings
