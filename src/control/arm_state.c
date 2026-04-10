@@ -1,3 +1,8 @@
+/*
+ * 責務: CAN feedback とリミットスイッチ情報をアーム状態へ反映する。
+ * 依存関係: drivers/can_bus と drivers/limit_switch から入力を受け、control/arm_control が参照する ArmState を更新する。
+ */
+
 #include "control/arm_state.h"
 
 #include <string.h>

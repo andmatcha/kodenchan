@@ -1,3 +1,8 @@
+/*
+ * 責務: UARTで受けた PacketACv6 manual 入力を直接アーム制御CANへ変換して送信する。
+ * 依存関係: app の init/poll から呼ばれ、drivers / protocol / control の隣接レイヤーを接続してCAN送信まで進める。
+ */
+
 #include "services/ac_direct_arm_service.h"
 
 #include "control/arm_control.h"

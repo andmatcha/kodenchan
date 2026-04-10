@@ -1,3 +1,8 @@
+/*
+ * 責務: マニュアル入力、PID、リミット保護を合成して最終モーター指令を生成する。
+ * 依存関係: 入力は ManualInput と ArmState、出力は protocol/arm_can_protocol に渡す ArmMotorCommand。
+ */
+
 #include "control/arm_control.h"
 
 #include <string.h>

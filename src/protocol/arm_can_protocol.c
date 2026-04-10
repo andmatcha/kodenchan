@@ -1,3 +1,8 @@
+/*
+ * 責務: アーム制御指令を motor CAN ID 0x200 / 0x1FF / 0x208 の data へ詰める。
+ * 依存関係: control/arm_control の ArmMotorCommand を入力にし、drivers/can_bus が送る ArmCanFrame を出力する。
+ */
+
 #include "protocol/arm_can_protocol.h"
 
 #include <string.h>

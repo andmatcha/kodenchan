@@ -1,3 +1,8 @@
+/*
+ * 責務: ACv6 manual 入力を snapshot として保持し、timeout と正規化を行う。
+ * 依存関係: protocol/ac_packet_v6 から AcPacketV6 を受け、control/arm_control へ ManualInput を渡す。
+ */
+
 #include "control/manual_input.h"
 
 static void set_raw_neutral(ManualInputSnapshot *snapshot)

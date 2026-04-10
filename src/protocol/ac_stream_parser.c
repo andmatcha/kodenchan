@@ -1,3 +1,8 @@
+/*
+ * 責務: UART byte stream から AC header を探し、CRC valid な PacketACv6 を抽出する。
+ * 依存関係: drivers/uart_async の受信byte列を入力にし、protocol/ac_packet_v6 でdecodeした packet を services へ渡す。
+ */
+
 #include "protocol/ac_stream_parser.h"
 
 #include <string.h>

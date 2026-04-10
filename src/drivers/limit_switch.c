@@ -1,3 +1,8 @@
+/*
+ * 責務: GPIO から base horizon の左右リミットスイッチ状態を読む。
+ * 依存関係: HAL GPIO を入力元とし、services/ac_direct_arm_service 経由で control/arm_state へ状態を渡す。
+ */
+
 #include "drivers/limit_switch.h"
 
 #include "main.h"

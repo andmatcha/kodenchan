@@ -1,3 +1,8 @@
+/*
+ * 責務: CRC16-CCITT-FALSE を計算する。
+ * 依存関係: protocol/ac_packet_v6 から raw byte列を受け、header後続データの検証に使う CRC値を返す。
+ */
+
 #include "protocol/crc16_ccitt.h"
 
 uint16_t crc16_ccitt_false(const uint8_t *data, uint32_t length)

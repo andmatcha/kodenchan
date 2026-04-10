@@ -1,3 +1,8 @@
+/*
+ * 責務: HAL CAN の filter 設定、送信、feedback polling をまとめる。
+ * 依存関係: services から送信frameを受けてHAL CANへ出し、受信feedbackは callback で control/arm_state 側へ渡す。
+ */
+
 #include "drivers/can_bus.h"
 
 #include "main.h"
