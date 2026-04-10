@@ -3,6 +3,7 @@
 #include "drivers/uart_async.h"
 #include "main.h"
 #include "services/ac_direct_arm_service.h"
+#include "services/button_can_tx_service.h"
 
 extern CAN_HandleTypeDef hcan;
 extern UART_HandleTypeDef huart2;
@@ -10,11 +11,13 @@ extern UART_HandleTypeDef huart2;
 void app_init(void)
 {
   ac_direct_arm_service_init(&hcan, &huart2);
+  button_can_tx_service_init();
 }
 
 void app_poll(void)
 {
   ac_direct_arm_service_poll();
+  button_can_tx_service_poll();
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
