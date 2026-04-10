@@ -244,15 +244,16 @@ HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
   return status;
 }
 
-static void poll_rx(CanBusRxCallback callback, void *context, bool print_rx)
+static uint32_t poll_rx(CanBusRxCallback callback, void *context, bool print_rx)
 {
   CAN_RxHeaderTypeDef rx_header = {0};
   uint8_t rx_data[8] = {0};
   uint32_t fifos[2] = {CAN_RX_FIFO0, CAN_RX_FIFO1};
+  uint32_t received_count = 0U;
 
   if (s_hcan == 0)
   {
-    return;
+    return 0U;
   }
 
   for (uint32_t fifo_index = 0U; fifo_index < 2U; ++fifo_index)
@@ -267,6 +268,8 @@ static void poll_rx(CanBusRxCallback callback, void *context, bool print_rx)
         Error_Handler();
       }
 
+      ++received_count;
+
       if (print_rx)
       {
         print_can_rx_line(&rx_header, rx_data);
@@ -280,19 +283,21 @@ static void poll_rx(CanBusRxCallback callback, void *context, bool print_rx)
       --pending;
     }
   }
+
+  return received_count;
 }
 
-void can_bus_poll(CanBusRxCallback callback, void *context)
+uint32_t can_bus_poll(CanBusRxCallback callback, void *context)
 {
-  poll_rx(callback, context, false);
+  return poll_rx(callback, context, false);
 }
 
-void can_bus_log_rx(void)
+uint32_t can_bus_log_rx(void)
 {
-  poll_rx(0, 0, true);
+  return poll_rx(0, 0, true);
 }
 
-void can_bus_discard_rx(void)
+uint32_t can_bus_discard_rx(void)
 {
-  poll_rx(0, 0, false);
+  return poll_rx(0, 0, false);
 }
