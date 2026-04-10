@@ -37,7 +37,12 @@ void arm_can_protocol_pack_manual_command(const ArmMotorCommand *command, ArmCan
   frames[1].data[7] = 0U;
 
   frames[2].std_id = ARM_CAN_STD_ID_AUX;
-  frames[2].data[0] = command->keyboard_nyokki_enabled;
-  frames[2].data[3] = command->usb_nyokki_push;
-  frames[2].data[4] = command->usb_nyokki_pull;
+  frames[2].data[0] = command->kbd_pp;
+  frames[2].data[1] = command->kbd_en;
+  frames[2].data[2] = command->kbd_yaman;
+  frames[2].data[3] = command->nyokki_push;
+  frames[2].data[4] = command->nyokki_pull;
+  frames[2].data[5] = command->initialize;
+  frames[2].data[6] = command->home;
+  frames[2].data[7] = command->kbd_start;
 }

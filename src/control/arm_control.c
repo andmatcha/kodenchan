@@ -1,13 +1,11 @@
 /*
- * 責務: マニュアル入力、PID、リミット保護を合成して最終モーター指令を生成する。
+ * 責務: マニュアル入力とPIDを合成して最終モーター指令を生成する。
  * 依存関係: 入力は ManualInput と ArmState、出力は protocol/arm_can_protocol に渡す ArmMotorCommand。
  */
 
 #include "control/arm_control.h"
 
 #include <string.h>
-
-#define LIMIT_ESCAPE_COMMAND 2000
 
 static int16_t clamp_command(float value)
 {
@@ -95,25 +93,14 @@ bool arm_control_make_command(const ManualInput *input, const ArmState *state, A
     command->motor[i] = (input->normalized[i] != 0) ? input->normalized[i] : pid->rpm_output[i];
   }
 
-  if (state->limit_right && state->limit_left)
-  {
-    command->motor[ARM_AXIS_BASE_HORIZON] = 0;
-    reset_axis_pid(pid, ARM_AXIS_BASE_HORIZON);
-  }
-  else if (state->limit_right && (input->normalized[ARM_AXIS_BASE_HORIZON] > 0))
-  {
-    command->motor[ARM_AXIS_BASE_HORIZON] = -LIMIT_ESCAPE_COMMAND;
-    reset_axis_pid(pid, ARM_AXIS_BASE_HORIZON);
-  }
-  else if (state->limit_left && (input->normalized[ARM_AXIS_BASE_HORIZON] < 0))
-  {
-    command->motor[ARM_AXIS_BASE_HORIZON] = LIMIT_ESCAPE_COMMAND;
-    reset_axis_pid(pid, ARM_AXIS_BASE_HORIZON);
-  }
-
-  command->keyboard_nyokki_enabled = input->keyboard_nyokki_enabled;
-  command->usb_nyokki_push = input->usb_nyokki_push;
-  command->usb_nyokki_pull = input->usb_nyokki_pull;
+  command->kbd_pp = input->kbd_pp;
+  command->kbd_en = input->kbd_en;
+  command->kbd_yaman = input->kbd_yaman;
+  command->nyokki_push = input->nyokki_push;
+  command->nyokki_pull = input->nyokki_pull;
+  command->initialize = input->initialize;
+  command->home = input->home;
+  command->kbd_start = input->kbd_start;
 
   return true;
 }

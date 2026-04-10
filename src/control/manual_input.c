@@ -87,9 +87,14 @@ bool manual_input_to_normalized(const ManualInputSnapshot *snapshot, ManualInput
     input->normalized[i] = (int16_t)normalized;
   }
 
-  input->keyboard_nyokki_enabled = snapshot->control_byte & 0x01U;
-  input->usb_nyokki_push = (snapshot->control_byte >> 3) & 0x01U;
-  input->usb_nyokki_pull = (snapshot->control_byte >> 4) & 0x01U;
+  input->kbd_pp = snapshot->control_byte & 0x01U;
+  input->kbd_en = (snapshot->control_byte >> 1) & 0x01U;
+  input->kbd_yaman = (snapshot->control_byte >> 2) & 0x01U;
+  input->nyokki_push = (snapshot->control_byte >> 3) & 0x01U;
+  input->nyokki_pull = (snapshot->control_byte >> 4) & 0x01U;
+  input->initialize = (snapshot->control_byte >> 5) & 0x01U;
+  input->home = (snapshot->control_byte >> 6) & 0x01U;
+  input->kbd_start = (snapshot->control_byte >> 7) & 0x01U;
 
   return true;
 }

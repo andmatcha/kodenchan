@@ -9,7 +9,6 @@
 #include "control/arm_state.h"
 #include "control/manual_input.h"
 #include "drivers/can_bus.h"
-#include "drivers/limit_switch.h"
 #include "drivers/uart_async.h"
 #include "main.h"
 #include "protocol/ac_stream_parser.h"
@@ -74,13 +73,6 @@ static bool control_period_elapsed(uint32_t now_ms)
   return true;
 }
 
-static void update_limit_switches(void)
-{
-  LimitSwitchState limit_switches = {0};
-  limit_switch_read(&limit_switches);
-  arm_state_set_limit_switches(&s_arm_state, &limit_switches);
-}
-
 static void send_command(const ArmMotorCommand *command)
 {
   ArmCanFrame frames[ARM_CAN_FRAME_COUNT];
@@ -99,7 +91,6 @@ static void send_command(const ArmMotorCommand *command)
 static void run_control_period(uint32_t now_ms)
 {
   manual_input_apply_timeout(&s_manual_snapshot, now_ms);
-  update_limit_switches();
 
   if (!manual_input_to_normalized(&s_manual_snapshot, &s_manual_input))
   {

@@ -1,6 +1,6 @@
 /*
- * 責務: CAN feedback とリミットスイッチ情報をアーム状態へ反映する。
- * 依存関係: drivers/can_bus と drivers/limit_switch から入力を受け、control/arm_control が参照する ArmState を更新する。
+ * 責務: CAN feedback をアーム状態へ反映する。
+ * 依存関係: drivers/can_bus から入力を受け、control/arm_control が参照する ArmState を更新する。
  */
 
 #include "control/arm_state.h"
@@ -52,15 +52,4 @@ void arm_state_handle_can_feedback(ArmState *state, uint16_t std_id, const uint8
       state->angle[axis] = read_u16_le(&data[0]);
     }
   }
-}
-
-void arm_state_set_limit_switches(ArmState *state, const LimitSwitchState *limit_switches)
-{
-  if ((state == 0) || (limit_switches == 0))
-  {
-    return;
-  }
-
-  state->limit_right = limit_switches->base_horizon_right;
-  state->limit_left = limit_switches->base_horizon_left;
 }

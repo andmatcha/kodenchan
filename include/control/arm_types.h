@@ -25,8 +25,6 @@ typedef struct
 {
   int16_t rpm[ARM_AXIS_COUNT];
   uint16_t angle[ARM_AXIS_COUNT];
-  bool limit_right;
-  bool limit_left;
 } ArmState;
 
 typedef struct
@@ -40,17 +38,27 @@ typedef struct
 typedef struct
 {
   int16_t normalized[ARM_AXIS_COUNT];
-  uint8_t keyboard_nyokki_enabled;
-  uint8_t usb_nyokki_push;
-  uint8_t usb_nyokki_pull;
+  uint8_t kbd_pp;
+  uint8_t kbd_en;
+  uint8_t kbd_yaman;
+  uint8_t nyokki_push;
+  uint8_t nyokki_pull;
+  uint8_t initialize;
+  uint8_t home;
+  uint8_t kbd_start;
 } ManualInput;
 
 typedef struct
 {
   int16_t motor[ARM_AXIS_COUNT];
-  uint8_t keyboard_nyokki_enabled;
-  uint8_t usb_nyokki_push;
-  uint8_t usb_nyokki_pull;
+  uint8_t kbd_pp;
+  uint8_t kbd_en;
+  uint8_t kbd_yaman;
+  uint8_t nyokki_push;
+  uint8_t nyokki_pull;
+  uint8_t initialize;
+  uint8_t home;
+  uint8_t kbd_start;
 } ArmMotorCommand;
 
 typedef struct

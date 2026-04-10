@@ -69,10 +69,6 @@ void Error_Handler(void);
 #define VCP_RX_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
-#define BASE_HORIZON_RIGHT_LIMIT_Pin GPIO_PIN_0
-#define BASE_HORIZON_RIGHT_LIMIT_GPIO_Port GPIOA
-#define BASE_HORIZON_LEFT_LIMIT_Pin GPIO_PIN_1
-#define BASE_HORIZON_LEFT_LIMIT_GPIO_Port GPIOA
 
 /* USER CODE END Private defines */
 

@@ -5,12 +5,55 @@
 
 #include "drivers/can_bus.h"
 
+#include "drivers/uart_async.h"
 #include "main.h"
 
 #define CAN_TX_TIMEOUT_MS 10U
 #define CAN_FILTER_STDID_SHIFT 5U
 
 static CAN_HandleTypeDef *s_hcan = 0;
+
+static char hex_digit(uint8_t value)
+{
+  return (value < 10U) ? (char)('0' + value) : (char)('A' + (value - 10U));
+}
+
+static void write_hex_byte(char *text, uint8_t value)
+{
+  text[0] = hex_digit((uint8_t)(value >> 4));
+  text[1] = hex_digit((uint8_t)(value & 0x0FU));
+}
+
+static void print_can_tx_line(uint16_t std_id, const uint8_t data[8])
+{
+  char line[39];
+  uint32_t offset = 0U;
+
+  line[offset++] = 'C';
+  line[offset++] = 'A';
+  line[offset++] = 'N';
+  line[offset++] = ' ';
+  line[offset++] = 'T';
+  line[offset++] = 'X';
+  line[offset++] = ' ';
+  line[offset++] = '0';
+  line[offset++] = 'x';
+  line[offset++] = hex_digit((uint8_t)((std_id >> 8) & 0x0FU));
+  line[offset++] = hex_digit((uint8_t)((std_id >> 4) & 0x0FU));
+  line[offset++] = hex_digit((uint8_t)(std_id & 0x0FU));
+  line[offset++] = ':';
+
+  for (uint32_t i = 0U; i < 8U; ++i)
+  {
+    line[offset++] = ' ';
+    write_hex_byte(&line[offset], data[i]);
+    offset += 2U;
+  }
+
+  line[offset++] = '\r';
+  line[offset++] = '\n';
+  (void)uart_async_write((const uint8_t *)line, (uint16_t)offset);
+}
 
 static HAL_StatusTypeDef configure_filter(uint32_t filter_bank, uint16_t std_id, uint16_t std_id_mask, uint32_t fifo)
 {
@@ -60,6 +103,7 @@ HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
   CAN_TxHeaderTypeDef tx_header = {0};
   uint32_t tx_mailbox = 0U;
   uint32_t start_tick = HAL_GetTick();
+  HAL_StatusTypeDef status = HAL_OK;
 
   if ((s_hcan == 0) || (data == 0))
   {
@@ -80,7 +124,13 @@ HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
     }
   }
 
-  return HAL_CAN_AddTxMessage(s_hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
+  status = HAL_CAN_AddTxMessage(s_hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
+  if (status == HAL_OK)
+  {
+    print_can_tx_line(std_id, data);
+  }
+
+  return status;
 }
 
 void can_bus_poll(CanBusRxCallback callback, void *context)
