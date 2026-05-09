@@ -23,7 +23,7 @@
 #define SERVICE_USB_FEEDBACK_CAN_STD_ID 0x209U
 #define SERVICE_UF_CAN_FLAGS (UF_PACKET_FLAG_VALID | UF_PACKET_FLAG_USB_PRESENT)
 #define SERVICE_UF_READ_ERROR_FLAGS UF_PACKET_FLAG_READ_ERROR
-#define SERVICE_USB_READ_RESPONSE_TIMEOUT_MS 1000U
+#define SERVICE_USB_READ_RESPONSE_TIMEOUT_MS 5000U
 #define SERVICE_USB_READ_PENDING_RESPONSE_COUNT 128U
 #define SERVICE_ARM_AUX_USB_READ_DATA_INDEX 2U
 
@@ -135,9 +135,15 @@ static void usb_read_note_request_sent(uint32_t now_ms)
   usb_read_enqueue_pending_response(now_ms);
 }
 
-static void usb_read_note_response_received(void)
+static bool usb_read_note_response_received(void)
 {
+  if (s_usb_read_pending_response_count == 0U)
+  {
+    return false;
+  }
+
   usb_read_dequeue_pending_response();
+  return true;
 }
 
 static void usb_read_check_response_timeout(uint32_t now_ms)
@@ -162,8 +168,10 @@ static void handle_can_feedback(uint16_t std_id, const uint8_t data[8], void *co
 
   if (std_id == SERVICE_USB_FEEDBACK_CAN_STD_ID)
   {
-    usb_read_note_response_received();
-    send_uf_packet_from_can(data);
+    if (usb_read_note_response_received())
+    {
+      send_uf_packet_from_can(data);
+    }
     return;
   }
 
