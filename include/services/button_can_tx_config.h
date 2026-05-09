@@ -5,6 +5,10 @@
 
 #include <stdint.h>
 
+#ifndef BUTTON_CAN_TX_ENABLED
+#define BUTTON_CAN_TX_ENABLED 0U
+#endif
+
 #define BUTTON_CAN_TX_POLL_PERIOD_MS 10U
 #define BUTTON_CAN_TX_DEBOUNCE_MS 20U
 #define BUTTON_CAN_TX_REPEAT_WHILE_PRESSED 1U
@@ -12,7 +16,8 @@
 #define BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS 1000U
 
 /*
- * ボタンを押した時に送るCANフレーム設定
+ * BUTTON_CAN_TX_ENABLED を 1 にした時に使う、ボタン押下CANフレーム設定。
+ * 現在は BUTTON_CAN_TX_ENABLED = 0 のため、PA0 / PA1 の入力読み取りと送信は行わない。
  *
  * 変更する場所:
  * - 送信先CAN ID: BUTTON_CAN_TX_PA0_STD_ID / BUTTON_CAN_TX_PA1_STD_ID

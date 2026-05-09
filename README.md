@@ -12,8 +12,8 @@ STM32F303K8 Nucleo で `PacketACv6` を UART から受け取り、アーム用 m
 - 主な制御: `PacketACv6` の Manual Mode (`mode == 1`) を motor command と補助制御フラグへ変換
 - 制御周期: 10 ms ごとに CAN command を送信
 - timeout: Manual 入力が 1000 ms 更新されないと neutral 入力に戻す
-- CAN監視モード: PA0 と PA1 を同時に 1000 ms 長押しすると通常制御と CAN RX monitor を切り替える
-- CAN RX monitor 中は Nucleo の LD3 が点灯し、CAN 受信中は高速点滅する
+- PA0 / PA1 のボタン操作: 現在は無効 (`BUTTON_CAN_TX_ENABLED = 0`)
+- UART への CAN TX / RX ログ出力: 現在は無効 (`CAN_BUS_LOG_ENABLED = 0`)
 
 ## 主な使い方
 
@@ -32,9 +32,7 @@ pio run -t upload
 ```
 
 5. 起動後は通常制御モードで動き、UART から受けた Manual Mode packet を CAN `0x200`, `0x1FF`, `0x208` へ周期送信する。
-6. PA0 / PA1 は active low のテスト送信ボタンとして使える。PA0 と PA1 を同時に 1000 ms 長押しすると CAN RX monitor へ切り替わり、Nucleo の LD3 が点灯して UART へ `CAN RX ...` のログを出す。CAN 受信中は LD3 が高速点滅する。もう一度同時長押しすると通常制御に戻る。
-
-通常制御中は CAN TX も UART へ `CAN TX 0x200: ...` の形式でログ出力されます。
+6. PA0 / PA1 のボタン操作は無効。通常操作では CAN RX monitor へ切り替わらず、UART への `CAN TX ...` / `CAN RX ...` ログも出力しない。
 
 ## 全体構成
 
@@ -50,7 +48,7 @@ main.c
       -> control/arm_control
       -> protocol/arm_can_protocol
       -> drivers/can_bus
-    -> services/button_can_tx_service
+    -> services/button_can_tx_service (現在 no-op)
       -> drivers/can_bus
 ```
 
@@ -61,9 +59,9 @@ main.c
 | HAL / board init | `src/main.c`, `src/stm32f3xx_hal_msp.c` | UART, DMA, CAN, GPIO, clock の初期化。`main()` から `app_init()` 後に `app_poll()` を回す。 |
 | app | `src/app.c` | 通常制御モードと CAN RX monitor の切り替え、各 service の呼び出し順序を決める。 |
 | service | `src/services/uart_packet_to_can_service.c` | UART byte stream を packet として取り込み、manual snapshot 更新、CAN feedback 反映、10 ms 周期の制御実行、CAN 送信までを接続する。 |
-| service | `src/services/button_can_tx_service.c` | PA0 / PA1 の入力を読み、単独押下時の設定済み CAN frame 送信と同時長押しのモード切替要求を扱う。押した直後の一瞬の揺れは無視する。 |
+| service | `src/services/button_can_tx_service.c` | 現在は `BUTTON_CAN_TX_ENABLED = 0` のため no-op。PA0 / PA1 の入力読み取り、単独押下の CAN frame 送信、同時長押しのモード切替はいずれも行わない。 |
 | driver | `src/drivers/uart_async.c` | USART2 の DMA circular RX と DMA TX ring buffer を提供する。packet やアームの意味は知らない。 |
-| driver | `src/drivers/can_bus.c` | CAN filter 設定、標準 ID / DLC 8 の送信、RX polling、UART への CAN log 出力を提供する。 |
+| driver | `src/drivers/can_bus.c` | CAN filter 設定、標準 ID / DLC 8 の送信、RX polling を提供する。現在は `CAN_BUS_LOG_ENABLED = 0` のため UART への CAN log は出力しない。 |
 | protocol | `src/protocol/ac_stream_parser.c` | UART byte stream から `AC` header を探して 39 byte の有効 packet を抽出する。CRC 不一致時は 1 byte ずらして再同期する。 |
 | protocol | `src/protocol/ac_packet_v6.c` | `PacketACv6` の header / CRC 検証、little endian field decode、mode 判定を行う。 |
 | protocol | `src/protocol/arm_can_protocol.c` | `ArmMotorCommand` を CAN `0x200`, `0x1FF`, `0x208` の 8 byte data へ pack する。 |
@@ -202,7 +200,9 @@ PID 出力は `-16384..16384` に clamp されます。manual 入力は同じ範
 | 5 | 0.13 | 0.0 | 0.03 |
 | 6 | 1.0 | 0.0 | 0.0 |
 
-PA0 / PA1 のテスト送信では、通常制御モードかつ同時長押し中でない場合に次の CAN frame を送ります。`BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` が有効なので、押し続けると 10 ms 周期で繰り返し送信します。
+PA0 / PA1 のボタン操作は現在無効です。`BUTTON_CAN_TX_ENABLED = 0` のため、PA0 / PA1 の入力読み取り、テスト CAN frame 送信、同時長押しによる CAN RX monitor 切り替えはいずれも行いません。
+
+再度有効化した場合の設定値は次の通りです。`BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` が有効なので、有効化後は押し続けると 10 ms 周期で繰り返し送信します。
 
 | 入力 | CAN ID | data | 意味 |
 | --- | ---: | --- | --- |
@@ -244,12 +244,12 @@ Manual Mode 以外を受けた場合、直ちに CAN command を停止するの�
 
 ### ファームウェアの動作 mode
 
-`app.c` が持つ通常制御モード / CAN RX monitor の切り替えです。PA0 と PA1 を同時に 1000 ms 長押しすると切り替わります。
+`app.c` には通常制御モード / CAN RX monitor の切り替えコードがありますが、現在は `BUTTON_CAN_TX_ENABLED = 0` のため PA0 / PA1 の同時長押しでは切り替わりません。通常操作では通常制御モードのまま動作します。
 
 | 動作 mode | CAN TX | CAN RX filter | UART log | LD3 | 主な処理 |
 | --- | --- | --- | --- | --- | --- |
-| 通常制御モード | 有効 | `0x200..0x207`, `0x300..0x307` | `CAN TX ...` | 消灯 | `PacketACv6` を motor CAN へ変換し、button 単独押下 frame も送信する。 |
-| CAN RX monitor | 無効 | 全 ID | `CAN RX ...` | 点灯。CAN受信中は高速点滅 | CAN 受信内容を UART へ表示する。manual 入力と PID は reset され続け、CAN TX は行わない。 |
+| 通常制御モード | 有効 | `0x200..0x207`, `0x300..0x307` | 無効 | 消灯 | `PacketACv6` を motor CAN へ変換する。button 単独押下 frame は送信しない。 |
+| CAN RX monitor | 無効 | 全 ID | 無効 | 点灯。CAN受信中は高速点滅 | 現在はボタン操作無効のため通常操作では入らない。入った場合も CAN 受信内容を UART へ表示しない。manual 入力と PID は reset され続け、CAN TX は行わない。 |
 
 CAN RX monitor に入ると `can_bus_set_tx_enabled(false)` で TX を止め、未送信 mailbox を abort します。通常制御へ戻ると parser / manual input / PID を reset し、通常 filter に戻してから TX を再度有効にします。
 
@@ -260,13 +260,15 @@ CAN RX monitor に入ると `can_bus_set_tx_enabled(false)` で TX を止め、�
 | 制御周期 | `SERVICE_CONTROL_PERIOD_MS` | 10 ms |
 | manual timeout | `MANUAL_INPUT_TIMEOUT_MS` | 1000 ms |
 | CAN TX mailbox wait | `CAN_TX_TIMEOUT_MS` | 10 ms |
-| button poll | `BUTTON_CAN_TX_POLL_PERIOD_MS` | 10 ms |
-| ボタン入力の判定待ち時間 | `BUTTON_CAN_TX_DEBOUNCE_MS` | 20 ms。押した直後の一瞬の揺れを無視するための時間。 |
-| button repeat | `BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` | 有効 |
-| button repeat period | `BUTTON_CAN_TX_REPEAT_PERIOD_MS` | 10 ms |
-| mode toggle hold | `BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS` | 1000 ms |
-| PA0 test frame | `BUTTON_CAN_TX_PA0_STD_ID`, `BUTTON_CAN_TX_PA0_DATA` | `0x200`, `00 00 00 00 FF FF 00 00` |
-| PA1 test frame | `BUTTON_CAN_TX_PA1_STD_ID`, `BUTTON_CAN_TX_PA1_DATA` | `0x200`, `00 00 00 00 00 01 00 00` |
+| button operation | `BUTTON_CAN_TX_ENABLED` | 無効 (`0`) |
+| button poll | `BUTTON_CAN_TX_POLL_PERIOD_MS` | 10 ms。有効化時のみ使用。 |
+| ボタン入力の判定待ち時間 | `BUTTON_CAN_TX_DEBOUNCE_MS` | 20 ms。有効化時のみ使用。 |
+| button repeat | `BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` | 有効。有効化時のみ使用。 |
+| button repeat period | `BUTTON_CAN_TX_REPEAT_PERIOD_MS` | 10 ms。有効化時のみ使用。 |
+| mode toggle hold | `BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS` | 1000 ms。有効化時のみ使用。 |
+| PA0 test frame | `BUTTON_CAN_TX_PA0_STD_ID`, `BUTTON_CAN_TX_PA0_DATA` | `0x200`, `00 00 00 00 FF FF 00 00`。有効化時のみ使用。 |
+| PA1 test frame | `BUTTON_CAN_TX_PA1_STD_ID`, `BUTTON_CAN_TX_PA1_DATA` | `0x200`, `00 00 00 00 00 01 00 00`。有効化時のみ使用。 |
+| CAN UART log | `CAN_BUS_LOG_ENABLED` | 無効 (`0`) |
 
 ## 現実装の注意点
 

@@ -5,10 +5,17 @@
 
 #include "drivers/can_bus.h"
 
-#include "drivers/uart_async.h"
 #include "main.h"
 
 #include <stdbool.h>
+
+#ifndef CAN_BUS_LOG_ENABLED
+#define CAN_BUS_LOG_ENABLED 0U
+#endif
+
+#if CAN_BUS_LOG_ENABLED
+#include "drivers/uart_async.h"
+#endif
 
 #define CAN_TX_TIMEOUT_MS 10U
 #define CAN_FILTER_STDID_SHIFT 5U
@@ -25,6 +32,8 @@
 
 static CAN_HandleTypeDef *s_hcan = 0;
 static bool s_tx_enabled = true;
+
+#if CAN_BUS_LOG_ENABLED
 
 static char hex_digit(uint8_t value)
 {
@@ -106,6 +115,8 @@ static void print_can_rx_line(const CAN_RxHeaderTypeDef *rx_header, const uint8_
     print_can_data_line("RX", rx_header->ExtId, CAN_EXT_ID_HEX_DIGITS, data, dlc);
   }
 }
+
+#endif
 
 static HAL_StatusTypeDef configure_filter(uint32_t filter_bank, uint16_t std_id, uint16_t std_id_mask, uint32_t fifo, uint32_t activation)
 {
@@ -237,10 +248,12 @@ HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
   }
 
   status = HAL_CAN_AddTxMessage(s_hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
+#if CAN_BUS_LOG_ENABLED
   if (status == HAL_OK)
   {
     print_can_tx_line(std_id, data);
   }
+#endif
 
   return status;
 }
@@ -251,6 +264,10 @@ static uint32_t poll_rx(CanBusRxCallback callback, void *context, bool print_rx)
   uint8_t rx_data[8] = {0};
   uint32_t fifos[2] = {CAN_RX_FIFO0, CAN_RX_FIFO1};
   uint32_t received_count = 0U;
+
+#if !CAN_BUS_LOG_ENABLED
+  (void)print_rx;
+#endif
 
   if (s_hcan == 0)
   {
@@ -271,10 +288,12 @@ static uint32_t poll_rx(CanBusRxCallback callback, void *context, bool print_rx)
 
       ++received_count;
 
+#if CAN_BUS_LOG_ENABLED
       if (print_rx)
       {
         print_can_rx_line(&rx_header, rx_data);
       }
+#endif
 
       if ((callback != 0) && (rx_header.IDE == CAN_ID_STD) && (rx_header.RTR == CAN_RTR_DATA))
       {
@@ -295,7 +314,11 @@ uint32_t can_bus_poll(CanBusRxCallback callback, void *context)
 
 uint32_t can_bus_log_rx(void)
 {
+#if CAN_BUS_LOG_ENABLED
   return poll_rx(0, 0, true);
+#else
+  return poll_rx(0, 0, false);
+#endif
 }
 
 uint32_t can_bus_discard_rx(void)

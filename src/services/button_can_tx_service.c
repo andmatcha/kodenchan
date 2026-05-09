@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#if BUTTON_CAN_TX_ENABLED
+
 typedef struct
 {
   GPIO_TypeDef *gpio_port;
@@ -276,3 +278,17 @@ bool button_can_tx_service_poll(bool tx_enabled)
 
   return combo_toggle_requested;
 }
+
+#else
+
+void button_can_tx_service_init(void)
+{
+}
+
+bool button_can_tx_service_poll(bool tx_enabled)
+{
+  (void)tx_enabled;
+  return false;
+}
+
+#endif
