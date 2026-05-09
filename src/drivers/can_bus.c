@@ -16,7 +16,8 @@
 #define CAN_RX_FILTER_BANK_300 1U
 #define CAN_RX_FILTER_BASE_ID_200 0x200U
 #define CAN_RX_FILTER_BASE_ID_300 0x300U
-#define CAN_RX_FILTER_ARM_MASK 0x7F8U
+#define CAN_RX_FILTER_ARM_MASK_200 0x7F0U
+#define CAN_RX_FILTER_ARM_MASK_300 0x7F8U
 #define CAN_STD_ID_HEX_DIGITS 3U
 #define CAN_EXT_ID_HEX_DIGITS 8U
 #define CAN_MAX_DLC 8U
@@ -130,7 +131,7 @@ static HAL_StatusTypeDef configure_normal_filters(void)
 
   status = configure_filter(CAN_RX_FILTER_BANK_200,
                             CAN_RX_FILTER_BASE_ID_200,
-                            CAN_RX_FILTER_ARM_MASK,
+                            CAN_RX_FILTER_ARM_MASK_200,
                             CAN_FILTER_FIFO0,
                             CAN_FILTER_ENABLE);
   if (status != HAL_OK)
@@ -140,7 +141,7 @@ static HAL_StatusTypeDef configure_normal_filters(void)
 
   return configure_filter(CAN_RX_FILTER_BANK_300,
                           CAN_RX_FILTER_BASE_ID_300,
-                          CAN_RX_FILTER_ARM_MASK,
+                          CAN_RX_FILTER_ARM_MASK_300,
                           CAN_FILTER_FIFO1,
                           CAN_FILTER_ENABLE);
 }
