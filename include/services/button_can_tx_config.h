@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #ifndef BUTTON_CAN_TX_ENABLED
-#define BUTTON_CAN_TX_ENABLED 0U
+#define BUTTON_CAN_TX_ENABLED 1U
 #endif
 
 #define BUTTON_CAN_TX_POLL_PERIOD_MS 10U
@@ -16,26 +16,26 @@
 #define BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS 1000U
 
 /*
- * BUTTON_CAN_TX_ENABLED を 1 にした時に使う、ボタン押下CANフレーム設定。
- * 現在は BUTTON_CAN_TX_ENABLED = 0 のため、PA0 / PA1 の入力読み取りと送信は行わない。
+ * PA0 / PA1 のボタン押下CANフレーム設定。
+ * PA0 と PA1 を同時に長押しすると、TX mode / RX monitor mode を切り替える。
  *
  * 変更する場所:
  * - 送信先CAN ID: BUTTON_CAN_TX_PA0_STD_ID / BUTTON_CAN_TX_PA1_STD_ID
  * - 送信データ:   BUTTON_CAN_TX_PA0_DATA / BUTTON_CAN_TX_PA1_DATA
  *
  * 現在の設定:
- * - PA0を押す: JOINT1向け CAN ID 0x200, data = 00 00 00 00 FF FF 00 00
- * - PA1を押す: JOINT1向け CAN ID 0x200, data = 00 00 00 00 00 01 00 00
+ * - PA0を押す: CAN ID 0x208, data = 01 00 00 00 FF FF 00 00
+ * - PA1を押す: CAN ID 0x208, data = 00 00 01 00 00 01 00 00
  *
  * 任意の8バイトを送りたい場合は BUTTON_CAN_TX_PA*_DATA の8個の値を直接書き換える。
  */
-#define BUTTON_CAN_TX_PA0_STD_ID 0x200U
+#define BUTTON_CAN_TX_PA0_STD_ID 0x208U
 #define BUTTON_CAN_TX_PA0_DATA \
-  {0x00U, 0x00U, 0x00U, 0x00U, 0xFFU, 0xFFU, 0x00U, 0x00U}
+  {0x01U, 0x00U, 0x00U, 0x00U, 0xFFU, 0xFFU, 0x00U, 0x00U}
 
-#define BUTTON_CAN_TX_PA1_STD_ID 0x200U
+#define BUTTON_CAN_TX_PA1_STD_ID 0x208U
 #define BUTTON_CAN_TX_PA1_DATA \
-  {0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x01U, 0x00U, 0x00U}
+  {0x00U, 0x00U, 0x01U, 0x00U, 0x00U, 0x01U, 0x00U, 0x00U}
 
 #define BUTTON_CAN_TX_CONFIG_COUNT 2U
 #define BUTTON_CAN_TX_CONFIGS \
