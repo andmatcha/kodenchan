@@ -153,5 +153,5 @@ Mac bridge は CRC OK の `UF` packet だけを処理する。
 - `uf_packet_encode()` は `flags`, `chunk_index`, `payload_len`, `payload[32]` を受ける形にする。
 - `payload_len > 32` は送信側で作らない。受信側で見つけた場合は破棄する。
 - `chunk_index` は `uint8` なので、1 回の read は最大 256 chunks、つまり 8192 byte までをこの簡易仕様の上限とする。
-- 現行の CAN feedback `0x209` は 8 byte の `lat_e7/lon_e7` 前提なので、USB read 元が別 CAN node の場合は、CAN 側も 32 byte text chunk を渡せる経路へ変える必要がある。
+- kodenchan 実装では、CAN `0x220..0x223` の 4 frame を 32 byte text chunk として扱い、CAN `0x225` を終端通知として UF の `end` フラグへ変換する。
 - この案は再送、順不同受信、複数 transfer の同時進行には対応しない。1 回の USB read に対して、chunk 番号順に data packet を送り、最後の packet に `end` を立てるだけの単純な仕様とする。

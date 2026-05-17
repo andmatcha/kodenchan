@@ -17,10 +17,14 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #define SERVICE_UART_READ_CHUNK_LEN 32U
 #define SERVICE_CONTROL_PERIOD_MS 10U
-#define SERVICE_USB_FEEDBACK_CAN_STD_ID 0x209U
+#define SERVICE_UF_TEXT_CAN_BASE_STD_ID 0x220U
+#define SERVICE_UF_TEXT_CAN_END_STD_ID 0x225U
+#define SERVICE_UF_TEXT_CAN_FRAME_COUNT 4U
+#define SERVICE_UF_TEXT_CAN_FRAME_DATA_LEN 8U
 #define SERVICE_UF_CAN_FLAGS (UF_PACKET_FLAG_VALID | UF_PACKET_FLAG_USB_PRESENT)
 #define SERVICE_UF_READ_ERROR_FLAGS UF_PACKET_FLAG_READ_ERROR
 #define SERVICE_USB_READ_RESPONSE_TIMEOUT_MS 5000U
@@ -34,6 +38,9 @@ static ArmState s_arm_state;
 static ArmPidState s_pid;
 static ArmMotorCommand s_command;
 static uint8_t s_uf_seq = 0U;
+static uint8_t s_uf_text_chunk_index = 0U;
+static uint8_t s_uf_text_payload[UF_PACKET_PAYLOAD_LEN];
+static uint8_t s_uf_text_received_mask = 0U;
 static uint16_t s_usb_read_requests_queued_for_send = 0U;
 static uint32_t s_usb_read_pending_response_started_at_ms[SERVICE_USB_READ_PENDING_RESPONSE_COUNT];
 static uint16_t s_usb_read_pending_response_head = 0U;
@@ -41,38 +48,92 @@ static uint16_t s_usb_read_pending_response_tail = 0U;
 static uint16_t s_usb_read_pending_response_count = 0U;
 static uint32_t s_last_control_tick = 0U;
 
-static int32_t read_i32_le(const uint8_t *data)
-{
-  uint32_t raw_value = (uint32_t)data[0] |
-                       ((uint32_t)data[1] << 8) |
-                       ((uint32_t)data[2] << 16) |
-                       ((uint32_t)data[3] << 24);
-
-  return (int32_t)raw_value;
-}
-
-static void send_uf_packet(uint8_t flags, int32_t lat_e7, int32_t lon_e7)
+static void send_uf_packet(uint8_t flags, uint8_t chunk_index, uint8_t payload_len, const uint8_t *payload)
 {
   uint8_t raw_packet[UF_PACKET_LEN];
 
-  uf_packet_encode(s_uf_seq++, flags, lat_e7, lon_e7, raw_packet);
+  uf_packet_encode(s_uf_seq++, flags, chunk_index, payload_len, payload, raw_packet);
   (void)uart_async_write(raw_packet, UF_PACKET_LEN);
 }
 
-static void send_uf_packet_from_can(const uint8_t data[8])
+static void send_uf_empty_packet(uint8_t flags)
 {
-  int32_t lat_e7 = 0;
-  int32_t lon_e7 = 0;
+  send_uf_packet(flags, 0U, 0U, 0);
+}
 
-  if (data == 0)
+static void uf_text_reset_buffer(void)
+{
+  memset(s_uf_text_payload, 0, sizeof(s_uf_text_payload));
+  s_uf_text_received_mask = 0U;
+}
+
+static void uf_text_reset_transfer(void)
+{
+  uf_text_reset_buffer();
+  s_uf_text_chunk_index = 0U;
+}
+
+static bool uf_text_has_buffered_payload(void)
+{
+  return s_uf_text_received_mask != 0U;
+}
+
+static uint8_t uf_text_payload_len(bool trim_padding)
+{
+  uint8_t payload_len = 0U;
+
+  for (uint8_t i = 0U; i < SERVICE_UF_TEXT_CAN_FRAME_COUNT; ++i)
   {
-    return;
+    if ((s_uf_text_received_mask & (uint8_t)(1U << i)) == 0U)
+    {
+      break;
+    }
+
+    payload_len = (uint8_t)(payload_len + SERVICE_UF_TEXT_CAN_FRAME_DATA_LEN);
   }
 
-  lat_e7 = read_i32_le(data);
-  lon_e7 = read_i32_le(data + 4U);
+  if (trim_padding)
+  {
+    while ((payload_len > 0U) && (s_uf_text_payload[payload_len - 1U] == 0U))
+    {
+      --payload_len;
+    }
+  }
 
-  send_uf_packet(SERVICE_UF_CAN_FLAGS, lat_e7, lon_e7);
+  return payload_len;
+}
+
+static void send_uf_text_buffered_packet(uint8_t extra_flags)
+{
+  uint8_t payload_len = uf_text_payload_len((extra_flags & UF_PACKET_FLAG_END) != 0U);
+
+  send_uf_packet((uint8_t)(SERVICE_UF_CAN_FLAGS | extra_flags),
+                 s_uf_text_chunk_index,
+                 payload_len,
+                 s_uf_text_payload);
+  ++s_uf_text_chunk_index;
+  uf_text_reset_buffer();
+
+  if ((extra_flags & UF_PACKET_FLAG_END) != 0U)
+  {
+    s_uf_text_chunk_index = 0U;
+  }
+}
+
+static void send_uf_text_end_packet(void)
+{
+  if (uf_text_has_buffered_payload())
+  {
+    send_uf_text_buffered_packet(UF_PACKET_FLAG_END);
+  }
+  else
+  {
+    send_uf_packet((uint8_t)(SERVICE_UF_CAN_FLAGS | UF_PACKET_FLAG_END),
+                   s_uf_text_chunk_index,
+                   0U,
+                   0);
+    s_uf_text_chunk_index = 0U;
+  }
 }
 
 static void usb_read_dequeue_pending_response(void)
@@ -93,13 +154,15 @@ static void usb_read_reset_requests(void)
   s_usb_read_pending_response_head = 0U;
   s_usb_read_pending_response_tail = 0U;
   s_usb_read_pending_response_count = 0U;
+  uf_text_reset_transfer();
 }
 
 static void usb_read_queue_send_request(void)
 {
   if (s_usb_read_requests_queued_for_send >= SERVICE_USB_READ_PENDING_RESPONSE_COUNT)
   {
-    send_uf_packet(SERVICE_UF_READ_ERROR_FLAGS, 0, 0);
+    send_uf_empty_packet(SERVICE_UF_READ_ERROR_FLAGS);
+    uf_text_reset_transfer();
     return;
   }
 
@@ -115,7 +178,8 @@ static void usb_read_enqueue_pending_response(uint32_t now_ms)
 {
   if (s_usb_read_pending_response_count >= SERVICE_USB_READ_PENDING_RESPONSE_COUNT)
   {
-    send_uf_packet(SERVICE_UF_READ_ERROR_FLAGS, 0, 0);
+    send_uf_empty_packet(SERVICE_UF_READ_ERROR_FLAGS);
+    uf_text_reset_transfer();
     usb_read_dequeue_pending_response();
   }
 
@@ -127,9 +191,16 @@ static void usb_read_enqueue_pending_response(uint32_t now_ms)
 
 static void usb_read_note_request_sent(uint32_t now_ms)
 {
+  bool first_pending_response = (s_usb_read_pending_response_count == 0U);
+
   if (s_usb_read_requests_queued_for_send > 0U)
   {
     --s_usb_read_requests_queued_for_send;
+  }
+
+  if (first_pending_response)
+  {
+    uf_text_reset_transfer();
   }
 
   usb_read_enqueue_pending_response(now_ms);
@@ -157,21 +228,54 @@ static void usb_read_check_response_timeout(uint32_t now_ms)
       return;
     }
 
-    send_uf_packet(SERVICE_UF_READ_ERROR_FLAGS, 0, 0);
+    send_uf_empty_packet(SERVICE_UF_READ_ERROR_FLAGS);
+    uf_text_reset_transfer();
     usb_read_dequeue_pending_response();
   }
+}
+
+static bool handle_uf_text_can_frame(uint16_t std_id, const uint8_t data[8])
+{
+  uint8_t frame_index = 0U;
+  uint32_t payload_offset = 0U;
+
+  if (data == 0)
+  {
+    return false;
+  }
+
+  if ((std_id >= SERVICE_UF_TEXT_CAN_BASE_STD_ID) &&
+      (std_id < (SERVICE_UF_TEXT_CAN_BASE_STD_ID + SERVICE_UF_TEXT_CAN_FRAME_COUNT)))
+  {
+    frame_index = (uint8_t)(std_id - SERVICE_UF_TEXT_CAN_BASE_STD_ID);
+    payload_offset = (uint32_t)frame_index * SERVICE_UF_TEXT_CAN_FRAME_DATA_LEN;
+
+    if ((frame_index == 0U) && uf_text_has_buffered_payload())
+    {
+      send_uf_text_buffered_packet(0U);
+    }
+
+    memcpy(&s_uf_text_payload[payload_offset], data, SERVICE_UF_TEXT_CAN_FRAME_DATA_LEN);
+    s_uf_text_received_mask |= (uint8_t)(1U << frame_index);
+    return true;
+  }
+
+  if (std_id == SERVICE_UF_TEXT_CAN_END_STD_ID)
+  {
+    send_uf_text_end_packet();
+    (void)usb_read_note_response_received();
+    return true;
+  }
+
+  return false;
 }
 
 static void handle_can_feedback(uint16_t std_id, const uint8_t data[8], void *context)
 {
   ArmState *state = (ArmState *)context;
 
-  if (std_id == SERVICE_USB_FEEDBACK_CAN_STD_ID)
+  if (handle_uf_text_can_frame(std_id, data))
   {
-    if (usb_read_note_response_received())
-    {
-      send_uf_packet_from_can(data);
-    }
     return;
   }
 

@@ -338,7 +338,7 @@ Fields:
 
 ### 4.5 `UF` (USB feedback)
 
-Purpose: downlink-only USB memory latitude/longitude feedback. This is separate from live rover GPS used by the map.
+Purpose: downlink-only USB memory text feedback. The text bytes are forwarded as-is and are separate from live rover GPS used by the map.
 
 Route: STM32 -> XBee RX serial -> Mac `dashboard_bridge` -> frontend WS `usb_feedback`. This route does not forward `UF` to Ubuntu `udp_joint_state_rx`.
 
@@ -347,9 +347,9 @@ Wire:
 | Item | Value |
 |---|---|
 | Header | `b"UF"` |
-| `struct` | `<2sBBiiH` |
-| Size | 14 bytes |
-| CRC | CRC-16/CCITT-FALSE over first 12 bytes |
+| `struct` | `<2sBBBB32sH` |
+| Size | 40 bytes |
+| CRC | CRC-16/CCITT-FALSE over first 38 bytes |
 
 Fields:
 
@@ -358,8 +358,9 @@ Fields:
 | header | `2s` | `b"UF"` |
 | seq | `uint8` | STM sequence |
 | flags | `uint8` | below |
-| lat_e7 | `int32` | latitude, degrees * `1e7` |
-| lon_e7 | `int32` | longitude, degrees * `1e7` |
+| chunk_index | `uint8` | 0-origin chunk number for one USB read |
+| payload_len | `uint8` | valid payload byte count, `0..32` |
+| payload | `uint8[32]` | raw text bytes; bytes after `payload_len` are padding |
 | crc16 | `uint16` | little-endian CRC |
 
 `UF.flags`:
@@ -370,7 +371,10 @@ Fields:
 | 1 | `usb_present` |
 | 2 | `read_busy` |
 | 3 | `read_error` |
-| 4-7 | reserved, send `0` |
+| 4 | `end` |
+| 5-7 | reserved, send `0` |
+
+The STM32 builds each UF payload from CAN `0x220..0x223` data frames, 8 bytes per frame. CAN `0x225` marks the end of the text stream; the corresponding UF packet is sent with the `end` flag set, and trailing `0x00` padding is excluded from `payload_len`.
 
 The Mac bridge persists accepted `UF` packets under `.logs/uf_capture/` as decoded `uf_records.jsonl`, raw `*.bin`, and `latest.json`.
 
