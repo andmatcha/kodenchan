@@ -24,8 +24,8 @@
  * - 送信データ:   BUTTON_CAN_TX_PA0_DATA / BUTTON_CAN_TX_PA1_DATA
  *
  * 現在の設定:
- * - PA0を押す: CAN ID 0x208, data = 01 00 00 00 FF FF 00 00
- * - PA1を押す: CAN ID 0x208, data = 00 00 01 00 00 01 00 00
+ * - PA0(上のボタン)を押す: キーボードニョッキ, 0x208[0]=1, data = 01 00 00 00 FF FF 00 00
+ * - PA1(下のボタン)を押す: USB読み取り要求, 0x208[2]=1, data = 00 00 01 00 00 01 00 00
  *
  * 任意の8バイトを送りたい場合は BUTTON_CAN_TX_PA*_DATA の8個の値を直接書き換える。
  */

@@ -2,18 +2,42 @@
 
 STM32F303K8 Nucleo で `PacketACv6` を UART から受け取り、アーム用 motor CAN に直接変換して送信するファームウェアです。旧構成にあった中間 uplink CAN を挟まず、`PacketACv6` の Manual Mode 入力を `0x200`, `0x1FF`, `0x208` の CAN フレームへ変換します。
 
-## 簡単な仕様
+## 現在の仕様
 
-- MCU / board: `nucleo_f303k8`, `STM32F303K8TX`
-- 使用基板: Nucleo を「こでんちゃん基板」のソケットへ取り付けて使う
-- UART: `USART2`, 115200 bps, 8N1, DMA circular RX。PC 接続を想定
-- CAN: STM32 bxCAN 1系統, PA11 = CAN_RX, PA12 = CAN_TX, 1 Mbps 設定。こでんちゃん基板上の CAN transceiver と RJ-45 経由でアーム側 CAN へ接続し、分電基板1 (Distribution Board 1) に直結できる
-- 入力 packet: `PacketACv6`, 39 byte 固定, header は `AC`, CRC は CRC16-CCITT-FALSE
-- 主な制御: `PacketACv6` の Manual Mode (`mode == 1`) を motor command と補助制御フラグへ変換
-- 制御周期: 10 ms ごとに CAN command を送信
-- timeout: Manual 入力が 1000 ms 更新されないと neutral 入力に戻す
-- PA0 / PA1 のボタン操作: 有効。単独押下でテストCAN送信、同時長押しで TX mode / CAN RX monitor を切り替える
-- UART への CAN RX ログ出力: 有効。CAN RX monitor 中だけ `CAN RX ...` を出力し、通常制御中の CAN TX ログは出力しない
+この firmware は、通常起動時は tx mode として動きます。USART2 で受けた `PacketACv6` をアーム用 CAN command へ変換して送信しながら、CAN `0x220..0x223` / `0x225` で届く USB text feedback を `UF` packet に詰めて USART2 へ返します。PA0 と PA1 を同時に 1000 ms 長押しすると rx mode に切り替わり、CAN TX を止めて全 CAN ID の受信ログだけを USART2 へ出します。
+
+| 項目 | 現在値 |
+| --- | --- |
+| MCU / board | `nucleo_f303k8`, `STM32F303K8TX` |
+| 使用基板 | Nucleo を「こでんちゃん基板」のソケットへ取り付けて使う |
+| USART2 | 115200 bps, 8N1, DMA circular RX。PC 接続を想定 |
+| CAN | STM32 bxCAN 1系統, PA11 = CAN_RX, PA12 = CAN_TX, 1 Mbps |
+| AC入力 | `PacketACv6`, 39 byte 固定, header `AC`, CRC16-CCITT-FALSE |
+| UF出力 | `UF` text packet, 40 byte 固定, header `UF`, CRC16-CCITT-FALSE |
+| 制御周期 | 10 ms |
+| Manual timeout | 1000 ms。更新が止まると neutral 入力へ戻す |
+| ボタン | PA0 / PA1 active low。PA0(上のボタン)はキーボードニョッキ、PA1(下のボタン)はUSB読み取り要求。同時長押しは tx/rx mode 切り替え |
+| ログ | rx mode 中のみ `CAN RX ...` を USART2 へ出力。tx mode 中の CAN TX ログは出力しない |
+
+### 動作モード
+
+| mode | CAN TX | CAN RX filter | USART2入力 | USART2出力 |
+| --- | --- | --- | --- | --- |
+| tx mode | 有効。`PacketACv6` から `0x200`, `0x1FF`, `0x208` を10 ms周期送信 | `0x200..0x20F`, `0x220..0x227`, `0x300..0x307` | `PacketACv6` | `UF` text packet |
+| rx mode | 無効。未送信 mailbox は mode 切り替え時に abort | 全 ID | 読み捨て | `CAN RX ...` ログ |
+
+### CAN ID
+
+| CAN ID | 方向 | mode | 内容 |
+| ---: | --- | --- | --- |
+| `0x200` | TX | tx | motor 0..3 command |
+| `0x1FF` | TX | tx | motor 4..6 command |
+| `0x208` | TX | tx | `control_byte` の補助制御 bit 展開 |
+| `0x202..0x206` | RX | tx | feedback RPM。byte 2..3 を big endian signed として読む |
+| `0x300..0x304` | RX | tx | feedback angle。byte 0..1 を little endian unsigned として読む |
+| `0x220..0x223` | RX | tx | UF text payload。各 ID の 8 byte data を `payload[0..31]` に配置 |
+| `0x225` | RX | tx | UF text 終端通知。`UF.flags.end` を立てて USART2 へ返す |
+| 全 ID | RX | rx | USART2 に `CAN RX ...` 形式でログ表示 |
 
 ## 主な使い方
 
@@ -218,12 +242,12 @@ PID 出力は `-16384..16384` に clamp されます。manual 入力は同じ範
 | 5 | 0.13 | 0.0 | 0.03 |
 | 6 | 1.0 | 0.0 | 0.0 |
 
-PA0 / PA1 のボタン操作は有効です。PA0 と PA1 を同時に 1000 ms 長押しすると TX mode / CAN RX monitor を切り替えます。`BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` が有効なので、単独押下は押し続けると 10 ms 周期で繰り返し送信します。
+PA0 / PA1 のボタン操作は有効です。PA0(上のボタン)はキーボードニョッキとして `0x208[0]=1` を送り、PA1(下のボタン)はUSB読み取り要求として `0x208[2]=1` を送ります。PA0 と PA1 を同時に 1000 ms 長押しすると TX mode / CAN RX monitor を切り替えます。`BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` が有効なので、単独押下は押し続けると 10 ms 周期で繰り返し送信します。
 
 | 入力 | CAN ID | data | 意味 |
 | --- | ---: | --- | --- |
-| PA0 active low | `0x208` | `01 00 00 00 FF FF 00 00` | 補助制御のテスト frame を送る |
-| PA1 active low | `0x208` | `00 00 01 00 00 01 00 00` | 補助制御のテスト frame を送る |
+| PA0 active low 上のボタン | `0x208` | `01 00 00 00 FF FF 00 00` | キーボードニョッキ。`0x208[0]=1` |
+| PA1 active low 下のボタン | `0x208` | `00 00 01 00 00 01 00 00` | USB読み取り要求。`0x208[2]=1` |
 
 ## 制御の内部実装
 
@@ -282,8 +306,8 @@ CAN RX monitor に入ると `can_bus_set_tx_enabled(false)` で TX を止め、�
 | button repeat | `BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` | 有効 |
 | button repeat period | `BUTTON_CAN_TX_REPEAT_PERIOD_MS` | 10 ms |
 | mode toggle hold | `BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS` | 1000 ms |
-| PA0 test frame | `BUTTON_CAN_TX_PA0_STD_ID`, `BUTTON_CAN_TX_PA0_DATA` | `0x208`, `01 00 00 00 FF FF 00 00` |
-| PA1 test frame | `BUTTON_CAN_TX_PA1_STD_ID`, `BUTTON_CAN_TX_PA1_DATA` | `0x208`, `00 00 01 00 00 01 00 00` |
+| PA0 上ボタン | `BUTTON_CAN_TX_PA0_STD_ID`, `BUTTON_CAN_TX_PA0_DATA` | キーボードニョッキ。`0x208[0]=1`, data `01 00 00 00 FF FF 00 00` |
+| PA1 下ボタン | `BUTTON_CAN_TX_PA1_STD_ID`, `BUTTON_CAN_TX_PA1_DATA` | USB読み取り要求。`0x208[2]=1`, data `00 00 01 00 00 01 00 00` |
 | CAN UART log | `CAN_BUS_LOG_ENABLED` | 有効 (`1`)。CAN RX monitor 中のみ受信ログを出力 |
 
 ## 現実装の注意点
