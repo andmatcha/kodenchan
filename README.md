@@ -13,13 +13,15 @@ USART2 は PA2（TX）/ PA15（RX）で ST-LINK の micro USB Virtual COM Port �
 
 ## UART → CAN（uplink）
 
-USART2 は、CRC-16/CCITT-FALSE 付きの `M`（19 byte）、`I`（19 byte）、`B`（15 byte）固定長バイナリパケットを受理します。CRC 不一致のパケットは送信しません。
+USART2はCRC-16/CCITT-FALSE付きの39 byte固定長`PacketACv6`を受理します。`flags`のmodeに応じてCAN出力を切り替え、headerまたはCRCが不正なpacketは送信しません。旧`M` / `I` / `B` packetは受理しません。
 
-| UART packet | CAN output |
+| PacketACv6 mode | CAN output |
 | --- | --- |
-| `M` | `0x200` / `0x201`、各 DLC 8 |
-| `I` | `0x210` / `0x211` / `0x212`、各 DLC 8 |
-| `B` | `0x501` / `0x502` / `0x503`、各 DLC 8 |
+| `0`: IK | `0x210` / `0x211` / `0x212`、各DLC 8 |
+| `1`: Manual | `0x200` / `0x201`、各DLC 8 |
+| `2`: Keyboard Auto | `0x501` / `0x502` / `0x503`、各DLC 8 |
+
+mode 3は予約値としてCANを送信しません。IKの`vel`、Keyboard Autoの`fault_code`、両modeの`current[0]`, `[1]`, `[5]`, `[6]`もPacketACv6からCANへ反映します。
 
 また、`CAN_ID,DATA\r` または `CAN_ID,DATA\n` の ASCII 行を CAN standard frame（DLC 4）へ変換します。`DATA` は signed 32 bit として読み、CAN data には big-endian で格納します。CAN ID `0` は受理しますが送信しません。
 
@@ -49,7 +51,7 @@ STM32 HALのUART/CAN入出力とtickをモック化し、実際のbridge service
 pio test -e native
 ```
 
-テスト対象には `M` / `I` / `B`、uplink ASCII、`JF` / `UF`、downlink ASCIIの全packet種別と、CRC不正、DLC不足、UF順序・timeout・優先期間、最新値table、tick wraparoundが含まれます。
+テスト対象にはPacketACv6のIK / Manual / Keyboard Auto全mode、uplink ASCII、`JF` / `UF`、downlink ASCIIと、CRC不正、予約mode、旧`M/I/B`拒否、DLC不足、UF順序・timeout・優先期間、最新値table、tick wraparoundが含まれます。
 
 CubeMX管理の初期化設定は今回変更していません。将来 CubeMX で反映したい改善は [`docs/cubemx_uart_can_bridge_future_improvements.md`](docs/cubemx_uart_can_bridge_future_improvements.md) にまとめています。
 
@@ -64,4 +66,4 @@ main.c
        -> protocol/crc16_ccitt
 ```
 
-以前の PacketACv6 制御、PID、ボタン送信、CANモニターモードは撤去されています。
+以前のPID、ボタン送信、CANモニターモードは撤去されています。

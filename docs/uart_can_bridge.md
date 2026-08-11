@@ -1,94 +1,70 @@
 # uplink / downlink における UART–CAN 間の受け渡し
 
-## 1. 調査範囲と要約
+## 1. 実装範囲と要約
 
-`xbee_communication/remote/uplink` と `downlink` の現行 C 実装を調査した。
-
-- **uplink**: USART1/USART3 で受信したバイナリパケットまたは ASCII 行を CAN1 の標準データフレームへ変換する。
-- **downlink**: CAN1 で受信したデータを `JF` / `UF` バイナリパケットまたは ASCII 行へ変換し、USART6 から送信する。USART3 で受信した ASCII 行も、最新値として USART6 へ中継する。
-- CAN1 は両側とも 11 bit 標準 ID、Normal mode、実装および `.ioc` 上は 1 Mbit/s である。
-- 実際に通信処理で使う UART はすべて 8N1、フロー制御なし。現行 `main.c` では uplink の USART1/3 と downlink の USART3/6 は 115200 bit/s である。ただし uplink の `.ioc` には USART1/3 が 57600 bit/s と残っており、不一致がある。
+- **uplink**: USART2で受信した`PacketACv6`またはASCII行をCANの11 bit標準data frameへ変換する。
+- **downlink**: CANで受信したデータを`JF` / `UF` binary packetまたはASCII行へ変換し、USART2から送信する。
+- CANはNormal mode、1 Mbit/sで動作する。
+- USART2はNucleo-STM32F303K8のST-LINK micro USB Virtual COM Portへ接続され、115200 bit/s、8N1、flow controlなしで動作する。
 
 概略は次の通りである。
 
 ```text
-上り:  UART (USART1/3) -> uplink -> CAN1
-下り:  CAN1 -> downlink -> UART (USART6)
-                         ^
-                         +-- USART3 の ASCII 最新値も合流
+上り:  USART2 -> PacketACv6 / ASCII decode -> CAN
+下り:  CAN -> JF / UF / ASCII encode -> USART2
 ```
 
 ## 2. uplink: UART から CAN
 
 ### 2.1 UART 入力の振り分け
 
-| UART | 入力 | 受信方法 | 備考 |
-|---|---|---|---|
-| USART1 (RX: PA10) | アーム用 `M` / `I` / `B` バイナリ、ローバー用 ASCII | 512 byte circular DMA | ASCII は先頭が文字 `0` の行だけを開始と認識する |
-| USART3 (RX: PC5) | ローバー用 ASCII | 512 byte circular DMA | 行頭の制限なし |
+Nucleo-STM32F303K8 の USART2を唯一の入出力窓口とし、アーム用 `PacketACv6` binaryとローバー用ASCIIを同じbyte streamから振り分ける。`AC` headerを検出すると39 byte固定長を受信し、それ以外はLFまたはCRまでをASCII行として扱う。旧 `M` / `I` / `B` packetは受理しない。
 
-改行は LF または CR のどちらでも行終端になる。USART1 は先頭バイトが `M`、`I`、`B` ならヘッダ別の固定長だけを集め、それ以外は `0` を除いて読み捨てる。
+### 2.2 アーム用 `PacketACv6`
 
-### 2.2 アーム用 UART バイナリパケットの共通則
-
-- 構造体は `packed` で、複数 byte 整数と末尾 CRC は STM32 のネイティブな **little-endian** で格納される。
-- CRC は **CRC-16/CCITT-FALSE**（初期値 `0xFFFF`、多項式 `0x1021`）で、末尾の `crc16` 自身を除く全 byte が計算対象である。
-- CRC または固定長が不正なら CAN へ送らない。
-- UART の `seq` は検証・並べ替えには使わず、CAN フレームにも渡さない。
-
-#### `M` (Manual、19 byte)
+- packetは39 byte固定長で、複数byte整数と末尾CRCはlittle-endianで格納する。
+- CRCはCRC-16/CCITT-FALSE（初期値 `0xFFFF`、多項式 `0x1021`）で、byte 0..36が計算対象である。
+- header、CRC、固定長が不正ならCANへ送らない。
+- UARTの`seq`は検証・並べ替えには使わず、CAN frameにも渡さない。
 
 | UART byte | フィールド |
 |---:|---|
-| 0 | header = `M` |
-| 1 | `seq` (`uint8`) |
-| 2..15 | `current[0..6]` (`uint16` × 7、LE) |
-| 16 | `control_byte` |
-| 17..18 | `crc16` (LE) |
+| 0..1 | header = `AC` |
+| 2 | `seq` (`uint8`) |
+| 3 | `flags` (`uint8`)、bit 4..5がmode |
+| 4..17 | `current[0..6]` (`uint16` × 7、LE) |
+| 18..23 | `angle[0..2]` (`uint16` × 3、LE) |
+| 24..29 | `vel[0..2]` (`int16` × 3、LE) |
+| 30 | `control_byte` |
+| 31..32 | `base_rel_mm_j0` (`int16`、LE) |
+| 33..34 | `auto_flags` (`uint16`、LE) |
+| 35..36 | `fault_code` (`uint16`、LE) |
+| 37..38 | `crc16` (LE) |
+
+#### mode 0: IK
 
 | CAN ID | DLC | CAN data byte 0..7 |
 |---:|---:|---|
-| `0x200` | 8 | `current[0]`, `[1]`, `[2]`, `[3]` を各 uint16 LE |
-| `0x201` | 8 | `current[4]`, `[5]`, `[6]` を各 uint16 LE、byte 6=`control_byte`、byte 7=`0` |
+| `0x210` | 8 | `angle[0]`, `[1]`, `[2]`を各uint16 LE、byte 6..7=`0` |
+| `0x211` | 8 | `vel[0]`, `[1]`, `[2]`を各int16 LE、byte 6=`control_byte`、byte 7=`0` |
+| `0x212` | 8 | `current[0]`, `[1]`, `[5]`, `[6]`を各uint16 LE |
 
-#### `I` (IK、19 byte)
-
-| UART byte | フィールド |
-|---:|---|
-| 0 | header = `I` |
-| 1 | `seq` (`uint8`) |
-| 2..9 | `current[0..3]` (`uint16` × 4、LE) |
-| 10..15 | `angle[0..2]` (`uint16` × 3、LE) |
-| 16 | `control_byte` |
-| 17..18 | `crc16` (LE) |
+#### mode 1: Manual
 
 | CAN ID | DLC | CAN data byte 0..7 |
 |---:|---:|---|
-| `0x210` | 8 | `angle[0]`, `[1]`, `[2]` を各 uint16 LE、byte 6..7=`0` |
-| `0x211` | 8 | `vel[0..2]` を各 int16 LE、byte 6=`control_byte`、byte 7=`0` |
-| `0x212` | 8 | UART の `current[0]`, `[1]`, `[2]`, `[3]` を各 uint16 LE |
+| `0x200` | 8 | `current[0]`, `[1]`, `[2]`, `[3]`を各uint16 LE |
+| `0x201` | 8 | `current[4]`, `[5]`, `[6]`を各uint16 LE、byte 6=`control_byte`、byte 7=`0` |
 
-現行 UART パケットに `vel` フィールドはなく、正規化用構造体がゼロ初期化されるため、`0x211` の `vel[0..2]` は常に `0` になる。
-
-#### `B` (Keyboard Auto、15 byte)
-
-| UART byte | フィールド |
-|---:|---|
-| 0 | header = `B` |
-| 1 | `seq` (`uint8`) |
-| 2..7 | `angle[0..2]` (`uint16` × 3、LE) |
-| 8 | `control_byte` |
-| 9..10 | `base_rel_mm_j0` (`int16`、LE) |
-| 11..12 | `auto_flags` (`uint16`、LE) |
-| 13..14 | `crc16` (LE) |
+#### mode 2: Keyboard Auto
 
 | CAN ID | DLC | CAN data byte 0..7 |
 |---:|---:|---|
-| `0x501` | 8 | `angle[0]`, `[1]`, `[2]` を各 uint16 LE、byte 6..7=`base_rel_mm_j0` (int16 LE) |
+| `0x501` | 8 | `angle[0]`, `[1]`, `[2]`を各uint16 LE、byte 6..7=`base_rel_mm_j0` (int16 LE) |
 | `0x502` | 8 | byte 0=`control_byte`、byte 1..2=`auto_flags` (LE)、byte 3..4=`fault_code` (LE)、byte 5..7=`0` |
-| `0x503` | 8 | uint16 LE の `255` を 4 個、すなわち `FF 00 FF 00 FF 00 FF 00` |
+| `0x503` | 8 | `current[0]`, `[1]`, `[5]`, `[6]`を各uint16 LE |
 
-`fault_code` は UART の `B` パケットに存在せず、現行実装では常に `0` である。
+mode 3は予約値としてCANを送信しない。
 
 ### 2.3 ローバー用 UART ASCII から CAN
 
@@ -191,7 +167,7 @@ ID と VALUE を最新値テーブルへ保存し、CAN 由来の最新値とは
 
 | 入力側 | 中間表現 | 出力側 | 保持されない情報 |
 |---|---|---|---|
-| uplink `M/I/B` UART パケット | 正規化したアーム値 | 固定 ID の CAN 2～3 フレーム | UART `seq`、CRC。`I` の速度は入力自体がなく 0 |
+| uplink `PacketACv6` | mode別のアーム値 | 固定 ID の CAN 2～3 フレーム | UART `seq`、CRC、modeごとに使わないAC field |
 | uplink ローバー ASCII | CAN ID + uint32 値 | 任意の標準 ID、DLC 4 | ASCII 表現、改行 |
 | downlink CAN `0x203/204` | encoder 5 個 + flags | `JF` UART パケット | 元の CAN ID 境界は `encoders[]` の位置に変換 |
 | downlink CAN `0x205..208` | 32 byte 連結 payload | `UF` UART パケット | 各 CAN フレームの個別時刻。ID は位置情報へ変換 |
@@ -202,9 +178,8 @@ ID と VALUE を最新値テーブルへ保存し、CAN 由来の最新値とは
 - `current`、`angle`、`vel`、encoder の物理単位、スケール、符号の意味は不明。
 - `control_byte`、`auto_flags`、`JF.flags` の各 bit の意味は、この `uplink` / `downlink` 内だけでは不明。
 - CAN ID `0x200` 系、`0x210` 系、`0x501` 系、`0x203..0x208` および汎用 ID のシステム全体での所有者・意味は不明。
-- `M/I/B` の UART 送信元、`JF/UF` の最終受信先、USART3 の接続先はコメントから用途名を推測できるだけで、物理配線は不明。
+- `PacketACv6` のUART送信元、`JF/UF` の最終受信先、元仕様のUSART3接続先はコメントから用途名を推測できるだけで、物理配線は不明。
 - UF payload の文字コードと、32 byte 中の NUL より後ろを受信側がどう扱うべきかは不明。実装は `payload_len` を最初の NUL までとしても、payload 自体は 32 byte 全て送る。
-- uplink の `B` に `fault_code` がない理由、`0x503` に 255 を 4 個固定送信する意味、`I` の `vel` を常に 0 とする意図は不明。
 - downlink が一般 CAN フレームを「8 byte の合計値」にする設計意図は不明。
 
 ## 6. 主な参照実装

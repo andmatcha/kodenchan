@@ -14,6 +14,10 @@
 #define MOCK_UART_TX_CAPACITY 4096U
 #define MOCK_CAN_CAPACITY 64U
 #define MOCK_CAN_DATA_LEN 8U
+#define TEST_AC_PACKET_LEN 39U
+#define TEST_AC_MODE_IK 0U
+#define TEST_AC_MODE_MANUAL 1U
+#define TEST_AC_MODE_KEYBOARD_AUTO 2U
 
 typedef struct
 {
@@ -172,6 +176,16 @@ static void finish_packet_crc(uint8_t *packet, size_t length)
   write_le16_for_test(&packet[length - 2U], crc);
 }
 
+static void initialize_ac_packet(uint8_t packet[TEST_AC_PACKET_LEN],
+                                 uint8_t mode)
+{
+  memset(packet, 0, TEST_AC_PACKET_LEN);
+  packet[0] = 'A';
+  packet[1] = 'C';
+  packet[2] = 0x42U;
+  packet[3] = (uint8_t)(mode << 4);
+}
+
 static void assert_can_frame(size_t index,
                              uint16_t expected_id,
                              uint8_t expected_dlc,
@@ -252,15 +266,16 @@ static void test_crc16_ccitt_false_known_vector(void)
                           crc16_ccitt_false(data, sizeof(data) - 1U));
 }
 
-static void test_manual_packet_converts_to_two_can_frames(void)
+static void test_ac_manual_mode_converts_to_two_can_frames(void)
 {
-  uint8_t packet[19] = {'M', 0x42};
+  uint8_t packet[TEST_AC_PACKET_LEN];
   const uint8_t expected_200[8] = {1, 2, 3, 4, 5, 6, 7, 8};
   const uint8_t expected_201[8] = {9, 10, 11, 12, 13, 14, 0xA5, 0};
 
-  memcpy(&packet[2], expected_200, sizeof(expected_200));
-  memcpy(&packet[10], expected_201, 6U);
-  packet[16] = 0xA5U;
+  initialize_ac_packet(packet, TEST_AC_MODE_MANUAL);
+  memcpy(&packet[4], expected_200, sizeof(expected_200));
+  memcpy(&packet[12], expected_201, 6U);
+  packet[30] = 0xA5U;
   finish_packet_crc(packet, sizeof(packet));
   append_uart_rx(packet, sizeof(packet));
 
@@ -271,19 +286,27 @@ static void test_manual_packet_converts_to_two_can_frames(void)
   assert_can_frame(1U, 0x201U, 8U, expected_201);
 }
 
-static void test_ik_packet_converts_to_three_can_frames(void)
+static void test_ac_ik_mode_converts_to_three_can_frames(void)
 {
-  uint8_t packet[19] = {'I', 9};
-  const uint8_t currents[8] = {0x01, 0x10, 0x02, 0x20,
-                               0x03, 0x30, 0x04, 0x40};
+  uint8_t packet[TEST_AC_PACKET_LEN];
+  const uint8_t currents[14] = {
+    0x01, 0x10, 0x02, 0x20, 0x03, 0x30, 0x04,
+    0x40, 0x05, 0x50, 0x06, 0x60, 0x07, 0x70
+  };
   const uint8_t angles[6] = {0x11, 0x21, 0x12, 0x22, 0x13, 0x23};
+  const uint8_t velocities[6] = {0xFE, 0xFF, 0x34, 0x12, 0x00, 0x80};
   const uint8_t expected_210[8] = {0x11, 0x21, 0x12, 0x22,
                                    0x13, 0x23, 0, 0};
-  const uint8_t expected_211[8] = {0, 0, 0, 0, 0, 0, 0x5A, 0};
+  const uint8_t expected_211[8] = {0xFE, 0xFF, 0x34, 0x12,
+                                   0x00, 0x80, 0x5A, 0};
+  const uint8_t expected_212[8] = {0x01, 0x10, 0x02, 0x20,
+                                   0x06, 0x60, 0x07, 0x70};
 
-  memcpy(&packet[2], currents, sizeof(currents));
-  memcpy(&packet[10], angles, sizeof(angles));
-  packet[16] = 0x5AU;
+  initialize_ac_packet(packet, TEST_AC_MODE_IK);
+  memcpy(&packet[4], currents, sizeof(currents));
+  memcpy(&packet[18], angles, sizeof(angles));
+  memcpy(&packet[24], velocities, sizeof(velocities));
+  packet[30] = 0x5AU;
   finish_packet_crc(packet, sizeof(packet));
   append_uart_rx(packet, sizeof(packet));
 
@@ -292,23 +315,32 @@ static void test_ik_packet_converts_to_three_can_frames(void)
   TEST_ASSERT_EQUAL_size_t(3U, s_can_tx_count);
   assert_can_frame(0U, 0x210U, 8U, expected_210);
   assert_can_frame(1U, 0x211U, 8U, expected_211);
-  assert_can_frame(2U, 0x212U, 8U, currents);
+  assert_can_frame(2U, 0x212U, 8U, expected_212);
 }
 
-static void test_keyboard_auto_packet_converts_to_three_can_frames(void)
+static void test_ac_keyboard_auto_mode_converts_to_three_can_frames(void)
 {
-  uint8_t packet[15] = {'B', 3};
+  uint8_t packet[TEST_AC_PACKET_LEN];
+  const uint8_t currents[14] = {
+    0x01, 0x10, 0x02, 0x20, 0x03, 0x30, 0x04,
+    0x40, 0x05, 0x50, 0x06, 0x60, 0x07, 0x70
+  };
   const uint8_t angles[6] = {1, 2, 3, 4, 5, 6};
   const uint8_t expected_501[8] = {1, 2, 3, 4, 5, 6, 0xFE, 0xFF};
-  const uint8_t expected_502[8] = {0xC3, 0x34, 0x12, 0, 0, 0, 0, 0};
-  const uint8_t expected_503[8] = {0xFF, 0, 0xFF, 0, 0xFF, 0, 0xFF, 0};
+  const uint8_t expected_502[8] = {0xC3, 0x34, 0x12, 0xCD, 0xAB, 0, 0, 0};
+  const uint8_t expected_503[8] = {0x01, 0x10, 0x02, 0x20,
+                                   0x06, 0x60, 0x07, 0x70};
 
-  memcpy(&packet[2], angles, sizeof(angles));
-  packet[8] = 0xC3U;
-  packet[9] = 0xFEU;
-  packet[10] = 0xFFU;
-  packet[11] = 0x34U;
-  packet[12] = 0x12U;
+  initialize_ac_packet(packet, TEST_AC_MODE_KEYBOARD_AUTO);
+  memcpy(&packet[4], currents, sizeof(currents));
+  memcpy(&packet[18], angles, sizeof(angles));
+  packet[30] = 0xC3U;
+  packet[31] = 0xFEU;
+  packet[32] = 0xFFU;
+  packet[33] = 0x34U;
+  packet[34] = 0x12U;
+  packet[35] = 0xCDU;
+  packet[36] = 0xABU;
   finish_packet_crc(packet, sizeof(packet));
   append_uart_rx(packet, sizeof(packet));
 
@@ -322,12 +354,14 @@ static void test_keyboard_auto_packet_converts_to_three_can_frames(void)
 
 static void test_binary_packet_with_bad_crc_is_rejected_and_parser_recovers(void)
 {
-  uint8_t invalid[19] = {'M', 1};
-  uint8_t valid[15] = {'B', 2};
+  uint8_t invalid[TEST_AC_PACKET_LEN];
+  uint8_t valid[TEST_AC_PACKET_LEN];
 
+  initialize_ac_packet(invalid, TEST_AC_MODE_MANUAL);
   finish_packet_crc(invalid, sizeof(invalid));
   invalid[5] ^= 0x80U;
-  valid[8] = 0x11U;
+  initialize_ac_packet(valid, TEST_AC_MODE_KEYBOARD_AUTO);
+  valid[30] = 0x11U;
   finish_packet_crc(valid, sizeof(valid));
   append_uart_rx(invalid, sizeof(invalid));
   append_uart_rx(valid, sizeof(valid));
@@ -336,6 +370,81 @@ static void test_binary_packet_with_bad_crc_is_rejected_and_parser_recovers(void
 
   TEST_ASSERT_EQUAL_size_t(3U, s_can_tx_count);
   TEST_ASSERT_EQUAL_HEX16(0x501U, s_can_tx[0].std_id);
+}
+
+static void test_ac_parser_recovers_when_corrupt_packet_consumes_next_header_a(void)
+{
+  uint8_t corrupt[TEST_AC_PACKET_LEN];
+  uint8_t valid[TEST_AC_PACKET_LEN];
+
+  initialize_ac_packet(corrupt, TEST_AC_MODE_MANUAL);
+  finish_packet_crc(corrupt, sizeof(corrupt));
+  initialize_ac_packet(valid, TEST_AC_MODE_KEYBOARD_AUTO);
+  finish_packet_crc(valid, sizeof(valid));
+
+  append_uart_rx(corrupt, sizeof(corrupt) - 1U);
+  append_uart_rx(valid, sizeof(valid));
+  uart_can_bridge_poll();
+
+  TEST_ASSERT_EQUAL_size_t(3U, s_can_tx_count);
+  TEST_ASSERT_EQUAL_HEX16(0x501U, s_can_tx[0].std_id);
+  TEST_ASSERT_EQUAL_HEX16(0x502U, s_can_tx[1].std_id);
+  TEST_ASSERT_EQUAL_HEX16(0x503U, s_can_tx[2].std_id);
+}
+
+static void test_ac_reserved_mode_is_rejected(void)
+{
+  uint8_t packet[TEST_AC_PACKET_LEN];
+
+  initialize_ac_packet(packet, 3U);
+  finish_packet_crc(packet, sizeof(packet));
+  append_uart_rx(packet, sizeof(packet));
+  uart_can_bridge_poll();
+  TEST_ASSERT_EQUAL_size_t(0U, s_can_tx_count);
+}
+
+static void test_ac_parser_resynchronizes_when_header_a_repeats(void)
+{
+  uint8_t packet[TEST_AC_PACKET_LEN];
+  const uint8_t prefix = 'A';
+
+  initialize_ac_packet(packet, TEST_AC_MODE_MANUAL);
+  finish_packet_crc(packet, sizeof(packet));
+  append_uart_rx(&prefix, 1U);
+  append_uart_rx(packet, sizeof(packet));
+  uart_can_bridge_poll();
+
+  TEST_ASSERT_EQUAL_size_t(2U, s_can_tx_count);
+  TEST_ASSERT_EQUAL_HEX16(0x200U, s_can_tx[0].std_id);
+  TEST_ASSERT_EQUAL_HEX16(0x201U, s_can_tx[1].std_id);
+}
+
+static void test_incomplete_ac_packet_does_not_emit_can(void)
+{
+  uint8_t packet[TEST_AC_PACKET_LEN];
+
+  initialize_ac_packet(packet, TEST_AC_MODE_MANUAL);
+  finish_packet_crc(packet, sizeof(packet));
+  append_uart_rx(packet, sizeof(packet) - 1U);
+  uart_can_bridge_poll();
+  TEST_ASSERT_EQUAL_size_t(0U, s_can_tx_count);
+}
+
+static void test_legacy_m_i_b_packets_are_not_accepted(void)
+{
+  uint8_t manual[19] = {'M', 1};
+  uint8_t ik[19] = {'I', 2};
+  uint8_t keyboard[15] = {'B', 3};
+
+  finish_packet_crc(manual, sizeof(manual));
+  finish_packet_crc(ik, sizeof(ik));
+  finish_packet_crc(keyboard, sizeof(keyboard));
+  append_uart_rx(manual, sizeof(manual));
+  append_uart_rx(ik, sizeof(ik));
+  append_uart_rx(keyboard, sizeof(keyboard));
+  append_uart_text("\n");
+  uart_can_bridge_poll();
+  TEST_ASSERT_EQUAL_size_t(0U, s_can_tx_count);
 }
 
 static void test_uplink_ascii_accepts_hex_decimal_negative_and_crlf(void)
@@ -377,8 +486,9 @@ static void test_malformed_and_overlong_ascii_lines_are_rejected_then_recover(vo
 
 static void test_mixed_binary_and_ascii_stream_is_parsed_in_order(void)
 {
-  uint8_t manual[19] = {'M', 1};
+  uint8_t manual[TEST_AC_PACKET_LEN];
 
+  initialize_ac_packet(manual, TEST_AC_MODE_MANUAL);
   finish_packet_crc(manual, sizeof(manual));
   append_uart_rx(manual, sizeof(manual));
   append_uart_text("0x321,7\r");
@@ -636,10 +746,15 @@ int main(int argc, char **argv)
 
   UNITY_BEGIN();
   RUN_TEST(test_crc16_ccitt_false_known_vector);
-  RUN_TEST(test_manual_packet_converts_to_two_can_frames);
-  RUN_TEST(test_ik_packet_converts_to_three_can_frames);
-  RUN_TEST(test_keyboard_auto_packet_converts_to_three_can_frames);
+  RUN_TEST(test_ac_manual_mode_converts_to_two_can_frames);
+  RUN_TEST(test_ac_ik_mode_converts_to_three_can_frames);
+  RUN_TEST(test_ac_keyboard_auto_mode_converts_to_three_can_frames);
   RUN_TEST(test_binary_packet_with_bad_crc_is_rejected_and_parser_recovers);
+  RUN_TEST(test_ac_parser_recovers_when_corrupt_packet_consumes_next_header_a);
+  RUN_TEST(test_ac_reserved_mode_is_rejected);
+  RUN_TEST(test_ac_parser_resynchronizes_when_header_a_repeats);
+  RUN_TEST(test_incomplete_ac_packet_does_not_emit_can);
+  RUN_TEST(test_legacy_m_i_b_packets_are_not_accepted);
   RUN_TEST(test_uplink_ascii_accepts_hex_decimal_negative_and_crlf);
   RUN_TEST(test_uplink_ascii_id_zero_is_accepted_without_can_output);
   RUN_TEST(test_malformed_and_overlong_ascii_lines_are_rejected_then_recover);

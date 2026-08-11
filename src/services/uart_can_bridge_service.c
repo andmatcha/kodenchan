@@ -13,12 +13,12 @@
 #include <string.h>
 
 #define UART_READ_CHUNK_LEN 64U
-#define UART_BINARY_MAX_LEN 19U
+#define AC_PACKET_LEN 39U
+#define AC_MODE_IK 0U
+#define AC_MODE_MANUAL 1U
+#define AC_MODE_KEYBOARD_AUTO 2U
+#define UART_BINARY_MAX_LEN AC_PACKET_LEN
 #define UART_ASCII_MAX_LEN 47U
-
-#define MANUAL_PACKET_LEN 19U
-#define IK_PACKET_LEN 19U
-#define KEYBOARD_AUTO_PACKET_LEN 15U
 
 #define JF_PACKET_LEN 16U
 #define UF_PACKET_LEN 40U
@@ -107,78 +107,91 @@ static bool binary_crc_is_valid(const uint8_t *packet, uint8_t length)
   return crc16_ccitt_false(packet, (uint32_t)length - 2U) == expected_crc;
 }
 
-static void send_manual_packet_to_can(const uint8_t packet[MANUAL_PACKET_LEN])
+static void send_manual_ac_to_can(const uint8_t packet[AC_PACKET_LEN])
 {
   uint8_t frame[8] = {0};
 
-  memcpy(frame, &packet[2], 8U);
+  memcpy(frame, &packet[4], 8U);
   (void)can_bus_send(0x200U, frame, 8U);
 
   memset(frame, 0, sizeof(frame));
-  memcpy(frame, &packet[10], 6U);
-  frame[6] = packet[16];
+  memcpy(frame, &packet[12], 6U);
+  frame[6] = packet[30];
   (void)can_bus_send(0x201U, frame, 8U);
 }
 
-static void send_ik_packet_to_can(const uint8_t packet[IK_PACKET_LEN])
+static void copy_ac_outer_currents(uint8_t frame[8],
+                                   const uint8_t packet[AC_PACKET_LEN])
+{
+  memcpy(&frame[0], &packet[4], 4U);
+  memcpy(&frame[4], &packet[14], 4U);
+}
+
+static void send_ik_ac_to_can(const uint8_t packet[AC_PACKET_LEN])
 {
   uint8_t frame[8] = {0};
 
-  memcpy(frame, &packet[10], 6U);
+  memcpy(frame, &packet[18], 6U);
   (void)can_bus_send(0x210U, frame, 8U);
 
   memset(frame, 0, sizeof(frame));
-  frame[6] = packet[16];
+  memcpy(frame, &packet[24], 6U);
+  frame[6] = packet[30];
   (void)can_bus_send(0x211U, frame, 8U);
 
-  memcpy(frame, &packet[2], 8U);
+  memset(frame, 0, sizeof(frame));
+  copy_ac_outer_currents(frame, packet);
   (void)can_bus_send(0x212U, frame, 8U);
 }
 
-static void send_keyboard_auto_packet_to_can(const uint8_t packet[KEYBOARD_AUTO_PACKET_LEN])
+static void send_keyboard_auto_ac_to_can(const uint8_t packet[AC_PACKET_LEN])
 {
   uint8_t frame[8] = {0};
 
-  memcpy(frame, &packet[2], 6U);
-  memcpy(&frame[6], &packet[9], 2U);
+  memcpy(frame, &packet[18], 6U);
+  memcpy(&frame[6], &packet[31], 2U);
   (void)can_bus_send(0x501U, frame, 8U);
 
   memset(frame, 0, sizeof(frame));
-  frame[0] = packet[8];
-  memcpy(&frame[1], &packet[11], 2U);
+  frame[0] = packet[30];
+  memcpy(&frame[1], &packet[33], 2U);
+  memcpy(&frame[3], &packet[35], 2U);
   (void)can_bus_send(0x502U, frame, 8U);
 
-  for (uint8_t i = 0U; i < 4U; ++i)
-  {
-    write_le16(&frame[i * 2U], 255U);
-  }
+  memset(frame, 0, sizeof(frame));
+  copy_ac_outer_currents(frame, packet);
   (void)can_bus_send(0x503U, frame, 8U);
 }
 
-static void handle_binary_packet(void)
+static bool handle_ac_packet(void)
 {
-  if (!binary_crc_is_valid(s_binary_packet, s_binary_expected_length))
+  uint8_t mode;
+
+  if ((s_binary_packet[0] != 'A') || (s_binary_packet[1] != 'C') ||
+      !binary_crc_is_valid(s_binary_packet, AC_PACKET_LEN))
   {
-    return;
+    return false;
   }
 
-  switch (s_binary_packet[0])
+  mode = (uint8_t)((s_binary_packet[3] >> 4) & 0x03U);
+  switch (mode)
   {
-    case 'M':
-      send_manual_packet_to_can(s_binary_packet);
+    case AC_MODE_IK:
+      send_ik_ac_to_can(s_binary_packet);
       break;
 
-    case 'I':
-      send_ik_packet_to_can(s_binary_packet);
+    case AC_MODE_MANUAL:
+      send_manual_ac_to_can(s_binary_packet);
       break;
 
-    case 'B':
-      send_keyboard_auto_packet_to_can(s_binary_packet);
+    case AC_MODE_KEYBOARD_AUTO:
+      send_keyboard_auto_ac_to_can(s_binary_packet);
       break;
 
     default:
       break;
   }
+  return true;
 }
 
 static bool ascii_line_to_can(const char *line)
@@ -223,17 +236,12 @@ static bool ascii_line_to_can(const char *line)
   return can_bus_send((uint16_t)parsed_id, frame, 4U) == HAL_OK;
 }
 
-static uint8_t binary_packet_length_for_header(uint8_t byte)
+static void begin_ac_packet(void)
 {
-  if ((byte == 'M') || (byte == 'I'))
-  {
-    return 19U;
-  }
-  if (byte == 'B')
-  {
-    return 15U;
-  }
-  return 0U;
+  s_uart_parse_state = UART_PARSE_BINARY;
+  s_binary_packet[0] = 'A';
+  s_binary_length = 1U;
+  s_binary_expected_length = AC_PACKET_LEN;
 }
 
 static void reset_uart_parser(void)
@@ -244,15 +252,56 @@ static void reset_uart_parser(void)
   s_ascii_length = 0U;
 }
 
+static void resynchronize_ac_packet(void)
+{
+  for (uint8_t i = 1U; (uint8_t)(i + 1U) < s_binary_length; ++i)
+  {
+    if ((s_binary_packet[i] == 'A') && (s_binary_packet[i + 1U] == 'C'))
+    {
+      uint8_t remaining = (uint8_t)(s_binary_length - i);
+      memmove(s_binary_packet, &s_binary_packet[i], remaining);
+      s_binary_length = remaining;
+      s_binary_expected_length = AC_PACKET_LEN;
+      s_uart_parse_state = UART_PARSE_BINARY;
+      return;
+    }
+  }
+
+  if (s_binary_packet[s_binary_length - 1U] == 'A')
+  {
+    begin_ac_packet();
+    return;
+  }
+
+  reset_uart_parser();
+}
+
 static void consume_uart_byte(uint8_t byte)
 {
   if (s_uart_parse_state == UART_PARSE_BINARY)
   {
     s_binary_packet[s_binary_length++] = byte;
+
+    if ((s_binary_length == 2U) && (s_binary_packet[1] != 'C'))
+    {
+      reset_uart_parser();
+      if (byte == 'A')
+      {
+        begin_ac_packet();
+      }
+      return;
+    }
+
     if (s_binary_length >= s_binary_expected_length)
     {
-      handle_binary_packet();
-      reset_uart_parser();
+      if (handle_ac_packet())
+      {
+        reset_uart_parser();
+      }
+      else
+      {
+        resynchronize_ac_packet();
+      }
     }
     return;
   }
@@ -275,12 +324,9 @@ static void consume_uart_byte(uint8_t byte)
 
   if (s_uart_parse_state == UART_PARSE_IDLE)
   {
-    s_binary_expected_length = binary_packet_length_for_header(byte);
-    if (s_binary_expected_length != 0U)
+    if (byte == 'A')
     {
-      s_uart_parse_state = UART_PARSE_BINARY;
-      s_binary_packet[0] = byte;
-      s_binary_length = 1U;
+      begin_ac_packet();
       return;
     }
 
