@@ -1,6 +1,6 @@
 /*
  * 責務: UART DMA circular RX と DMA TX ring を提供する。
- * 依存関係: HAL UART/DMA を下位層として使い、services/uart_packet_to_can_service へ受信byte列、retarget から送信byte列を受け渡す。
+ * 依存関係: HAL UART/DMA を下位層として使い、UART-CAN bridgeへbyte列を受け渡す。
  */
 
 #include "drivers/uart_async.h"
@@ -199,7 +199,6 @@ uint16_t uart_async_read(uint8_t *data, uint16_t max_length)
 
 int uart_async_write(const uint8_t *data, uint16_t length)
 {
-  uint16_t written = 0U;
   uint32_t start_tick = HAL_GetTick();
 
   if ((data == NULL) || (length == 0U))
@@ -222,25 +221,52 @@ int uart_async_write(const uint8_t *data, uint16_t length)
     return 0;
   }
 
-  while (written < length)
+  if (length >= UART_TX_BUFFER_LEN)
+  {
+    return 0;
+  }
+
+  for (;;)
   {
     uint32_t primask = enter_critical_section();
-    written += enqueue_uart_tx_locked(data + written, (uint16_t)(length - written));
+    if (get_uart_tx_free_locked() >= length)
+    {
+      uint16_t written = enqueue_uart_tx_locked(data, length);
+      start_uart_tx_dma_locked();
+      exit_critical_section(primask);
+      return (written == length) ? (int)written : 0;
+    }
     start_uart_tx_dma_locked();
     exit_critical_section(primask);
 
-    if (written >= length)
-    {
-      break;
-    }
-
     if ((HAL_GetTick() - start_tick) >= UART_TX_WRITE_TIMEOUT_MS)
     {
-      break;
+      return 0;
     }
   }
+}
 
-  return (int)written;
+void uart_async_discard_pending_tx(void)
+{
+  uint32_t primask;
+
+  if (s_huart == NULL)
+  {
+    return;
+  }
+
+  primask = enter_critical_section();
+  if (s_uart_tx_dma_active != 0U)
+  {
+    /* The in-flight DMA block must finish; everything queued behind it is dropped. */
+    s_uart_tx_head =
+      (uint16_t)((s_uart_tx_tail + s_uart_tx_dma_length) % UART_TX_BUFFER_LEN);
+  }
+  else
+  {
+    s_uart_tx_head = s_uart_tx_tail;
+  }
+  exit_critical_section(primask);
 }
 
 void uart_async_on_tx_complete(UART_HandleTypeDef *huart)

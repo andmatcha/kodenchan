@@ -1,6 +1,6 @@
 /*
  * 責務: CRC16-CCITT-FALSE を計算する。
- * 依存関係: protocol/ac_packet_v6 から raw byte列を受け、header後続データの検証に使う CRC値を返す。
+ * 依存関係: UART-CAN bridgeからraw byte列を受け、packetの検証と生成に使うCRC値を返す。
  */
 
 #include "protocol/crc16_ccitt.h"
