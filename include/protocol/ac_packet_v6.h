@@ -6,6 +6,7 @@
 
 #define AC_PACKET_V6_LEN 39U
 #define AC_PACKET_V6_CRC_OFFSET 37U
+#define AC_PACKET_V6_FLAG_USB_READ 0x40U
 #define AC_PACKET_MODE_MANUAL 1U
 
 typedef struct

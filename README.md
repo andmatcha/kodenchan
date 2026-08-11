@@ -2,18 +2,42 @@
 
 STM32F303K8 Nucleo で `PacketACv6` を UART から受け取り、アーム用 motor CAN に直接変換して送信するファームウェアです。旧構成にあった中間 uplink CAN を挟まず、`PacketACv6` の Manual Mode 入力を `0x200`, `0x1FF`, `0x208` の CAN フレームへ変換します。
 
-## 簡単な仕様
+## 現在の仕様
 
-- MCU / board: `nucleo_f303k8`, `STM32F303K8TX`
-- 使用基板: Nucleo を「こでんちゃん基板」のソケットへ取り付けて使う
-- UART: `USART2`, 115200 bps, 8N1, DMA circular RX。PC 接続を想定
-- CAN: STM32 bxCAN 1系統, PA11 = CAN_RX, PA12 = CAN_TX, 1 Mbps 設定。こでんちゃん基板上の CAN transceiver と RJ-45 経由でアーム側 CAN へ接続し、分電基板1 (Distribution Board 1) に直結できる
-- 入力 packet: `PacketACv6`, 39 byte 固定, header は `AC`, CRC は CRC16-CCITT-FALSE
-- 主な制御: `PacketACv6` の Manual Mode (`mode == 1`) を motor command と補助制御フラグへ変換
-- 制御周期: 10 ms ごとに CAN command を送信
-- timeout: Manual 入力が 1000 ms 更新されないと neutral 入力に戻す
-- CAN監視モード: PA0 と PA1 を同時に 1000 ms 長押しすると通常制御と CAN RX monitor を切り替える
-- CAN RX monitor 中は Nucleo の LD3 が点灯し、CAN 受信中は高速点滅する
+この firmware は、通常起動時は tx mode として動きます。USART2 で受けた `PacketACv6` をアーム用 CAN command へ変換して送信しながら、CAN `0x220..0x223` / `0x225` で届く USB text feedback を `UF` packet に詰めて USART2 へ返します。PA0 と PA1 を同時に 1000 ms 長押しすると rx mode に切り替わり、CAN TX を止めて全 CAN ID の受信ログだけを USART2 へ出します。
+
+| 項目 | 現在値 |
+| --- | --- |
+| MCU / board | `nucleo_f303k8`, `STM32F303K8TX` |
+| 使用基板 | Nucleo を「こでんちゃん基板」のソケットへ取り付けて使う |
+| USART2 | 115200 bps, 8N1, DMA circular RX。PC 接続を想定 |
+| CAN | STM32 bxCAN 1系統, PA11 = CAN_RX, PA12 = CAN_TX, 1 Mbps |
+| AC入力 | `PacketACv6`, 39 byte 固定, header `AC`, CRC16-CCITT-FALSE |
+| UF出力 | `UF` text packet, 40 byte 固定, header `UF`, CRC16-CCITT-FALSE |
+| 制御周期 | 10 ms |
+| Manual timeout | 1000 ms。更新が止まると neutral 入力へ戻す |
+| ボタン | PA0 / PA1 active low。PA0(上のボタン)はキーボードニョッキ、PA1(下のボタン)はUSB読み取り要求。同時長押しは tx/rx mode 切り替え |
+| ログ | rx mode 中のみ `CAN RX ...` を USART2 へ出力。tx mode 中の CAN TX ログは出力しない |
+
+### 動作モード
+
+| mode | CAN TX | CAN RX filter | USART2入力 | USART2出力 |
+| --- | --- | --- | --- | --- |
+| tx mode | 有効。`PacketACv6` から `0x200`, `0x1FF`, `0x208` を10 ms周期送信 | `0x200..0x20F`, `0x220..0x227`, `0x300..0x307` | `PacketACv6` | `UF` text packet |
+| rx mode | 無効。未送信 mailbox は mode 切り替え時に abort | 全 ID | 読み捨て | `CAN RX ...` ログ |
+
+### CAN ID
+
+| CAN ID | 方向 | mode | 内容 |
+| ---: | --- | --- | --- |
+| `0x200` | TX | tx | motor 0..3 command |
+| `0x1FF` | TX | tx | motor 4..6 command |
+| `0x208` | TX | tx | `control_byte` の補助制御 bit 展開 |
+| `0x202..0x206` | RX | tx | feedback RPM。byte 2..3 を big endian signed として読む |
+| `0x300..0x304` | RX | tx | feedback angle。byte 0..1 を little endian unsigned として読む |
+| `0x220..0x223` | RX | tx | UF text payload。各 ID の 8 byte data を `payload[0..31]` に配置 |
+| `0x225` | RX | tx | UF text 終端通知。`UF.flags.end` を立てて USART2 へ返す |
+| 全 ID | RX | rx | USART2 に `CAN RX ...` 形式でログ表示 |
 
 ## 主な使い方
 
@@ -34,7 +58,7 @@ pio run -t upload
 5. 起動後は通常制御モードで動き、UART から受けた Manual Mode packet を CAN `0x200`, `0x1FF`, `0x208` へ周期送信する。
 6. PA0 / PA1 は active low のテスト送信ボタンとして使える。PA0 と PA1 を同時に 1000 ms 長押しすると CAN RX monitor へ切り替わり、Nucleo の LD3 が点灯して UART へ `CAN RX ...` のログを出す。CAN 受信中は LD3 が高速点滅する。もう一度同時長押しすると通常制御に戻る。
 
-通常制御中は CAN TX も UART へ `CAN TX 0x200: ...` の形式でログ出力されます。
+通常制御中は CAN TX 関連のログを出さず、CAN RX monitor 中に受信データのみを UART へ表示します。
 
 ## 全体構成
 
@@ -60,10 +84,10 @@ main.c
 | --- | --- | --- |
 | HAL / board init | `src/main.c`, `src/stm32f3xx_hal_msp.c` | UART, DMA, CAN, GPIO, clock の初期化。`main()` から `app_init()` 後に `app_poll()` を回す。 |
 | app | `src/app.c` | 通常制御モードと CAN RX monitor の切り替え、各 service の呼び出し順序を決める。 |
-| service | `src/services/uart_packet_to_can_service.c` | UART byte stream を packet として取り込み、manual snapshot 更新、CAN feedback 反映、10 ms 周期の制御実行、CAN 送信までを接続する。 |
-| service | `src/services/button_can_tx_service.c` | PA0 / PA1 の入力を読み、単独押下時の設定済み CAN frame 送信と同時長押しのモード切替要求を扱う。押した直後の一瞬の揺れは無視する。 |
+| service | `src/services/uart_packet_to_can_service.c` | UART byte stream を packet として取り込み、manual snapshot 更新、CAN feedback / UF text feedback 反映、10 ms 周期の制御実行、CAN 送信までを接続する。 |
+| service | `src/services/button_can_tx_service.c` | PA0 / PA1 の入力読み取り、単独押下の CAN frame 送信、同時長押しの TX mode / CAN RX monitor 切り替えを行う。 |
 | driver | `src/drivers/uart_async.c` | USART2 の DMA circular RX と DMA TX ring buffer を提供する。packet やアームの意味は知らない。 |
-| driver | `src/drivers/can_bus.c` | CAN filter 設定、標準 ID / DLC 8 の送信、RX polling、UART への CAN log 出力を提供する。 |
+| driver | `src/drivers/can_bus.c` | CAN filter 設定、標準 ID / DLC 8 の送信、RX polling を提供する。CAN RX monitor 中は受信データを UART へログ出力する。 |
 | protocol | `src/protocol/ac_stream_parser.c` | UART byte stream から `AC` header を探して 39 byte の有効 packet を抽出する。CRC 不一致時は 1 byte ずらして再同期する。 |
 | protocol | `src/protocol/ac_packet_v6.c` | `PacketACv6` の header / CRC 検証、little endian field decode、mode 判定を行う。 |
 | protocol | `src/protocol/arm_can_protocol.c` | `ArmMotorCommand` を CAN `0x200`, `0x1FF`, `0x208` の 8 byte data へ pack する。 |
@@ -134,7 +158,7 @@ normalized[i] = (raw_current[i] - 255) * 64;
 | 5 | `ARM_AXIS_JOINT4` | joint4 | `current[5]` | `0x1FF` byte 2..3 = `motor[5]` | rpm `0x206` |
 | 6 | `ARM_AXIS_GRIPPER` | gripper | `current[6]` | `0x1FF` byte 4..5 = `motor[6]` | 現実装ではなし |
 
-通常制御時の CAN RX filter は `0x200..0x207` と `0x300..0x307` を受ける設定ですが、`ArmState` に反映するのは上表の feedback ID です。CAN RX monitor では全 ID を受ける filter に切り替えます。
+通常制御時の CAN RX filter は `0x200..0x20F`, `0x220..0x227`, `0x300..0x307` を受ける設定です。`ArmState` に反映するのは上表の feedback ID で、`0x220..0x223` と `0x225` は UF text feedback として扱います。CAN RX monitor では全 ID を受ける filter に切り替えます。
 
 ## CAN 送信 frame
 
@@ -181,6 +205,22 @@ normalized[i] = (raw_current[i] - 255) * 64;
 | 6 | 6 | `home` |
 | 7 | 7 | `kbd_start` |
 
+## UF text feedback
+
+通常制御モードでは、CAN `0x220..0x223` と `0x225` を UF text feedback として受けます。`0x220..0x223` は 8 byte ずつ UF payload の `payload[0..31]` に入れ、`0x225` を受けたら、その chunk を `end` flag 付きの UF packet として USART2 へ送ります。`end` 付き packet では末尾の `0x00` padding を `payload_len` から除きます。
+
+UF packet は [docs/docs/uf_text_packet_proposal.md](docs/docs/uf_text_packet_proposal.md) の形式で、40 byte 固定です。
+
+| byte | field | 内容 |
+| ---: | --- | --- |
+| 0..1 | header | `UF` |
+| 2 | `seq` | packet ごとに increment |
+| 3 | `flags` | `valid`, `usb_present`, `read_busy`, `read_error`, `end` |
+| 4 | `chunk_index` | read ごとに 0 から開始 |
+| 5 | `payload_len` | 有効 payload byte 数、最大 32 |
+| 6..37 | `payload` | CAN `0x220..0x223` の data |
+| 38..39 | `crc16` | 先頭 38 byte の CRC16-CCITT-FALSE |
+
 ## 実際に送信する値
 
 Manual Mode packet を受けた場合、送信値は次の流れで決まります。
@@ -202,12 +242,12 @@ PID 出力は `-16384..16384` に clamp されます。manual 入力は同じ範
 | 5 | 0.13 | 0.0 | 0.03 |
 | 6 | 1.0 | 0.0 | 0.0 |
 
-PA0 / PA1 のテスト送信では、通常制御モードかつ同時長押し中でない場合に次の CAN frame を送ります。`BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` が有効なので、押し続けると 10 ms 周期で繰り返し送信します。
+PA0 / PA1 のボタン操作は有効です。PA0(上のボタン)はキーボードニョッキとして `0x208[0]=1` を送り、PA1(下のボタン)はUSB読み取り要求として `0x208[2]=1` を送ります。PA0 と PA1 を同時に 1000 ms 長押しすると TX mode / CAN RX monitor を切り替えます。`BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` が有効なので、単独押下は押し続けると 10 ms 周期で繰り返し送信します。
 
 | 入力 | CAN ID | data | 意味 |
 | --- | ---: | --- | --- |
-| PA0 active low | `0x200` | `00 00 00 00 FF FF 00 00` | `motor[2]`, joint1 に `-1` を送る |
-| PA1 active low | `0x200` | `00 00 00 00 00 01 00 00` | `motor[2]`, joint1 に `+1` を送る |
+| PA0 active low 上のボタン | `0x208` | `01 00 00 00 FF FF 00 00` | キーボードニョッキ。`0x208[0]=1` |
+| PA1 active low 下のボタン | `0x208` | `00 00 01 00 00 01 00 00` | USB読み取り要求。`0x208[2]=1` |
 
 ## 制御の内部実装
 
@@ -216,7 +256,7 @@ PA0 / PA1 のテスト送信では、通常制御モードかつ同時長押し�
 1. `uart_async_read()` で USART2 DMA RX buffer から最大 32 byte ずつ読み出し、`ac_stream_parser` に流す。
 2. `ac_stream_parser_next()` が返す valid packet をすべて消費する。
 3. packet が Manual Mode なら `manual_input_update_from_packet()` で snapshot を更新する。
-4. `can_bus_poll()` で CAN feedback を取り込み、`arm_state_handle_can_feedback()` で RPM / angle を更新する。
+4. `can_bus_poll()` で CAN feedback を取り込み、`0x220..0x223` と `0x225` は UF text packet として USART2 へ返し、それ以外の対象 feedback は `arm_state_handle_can_feedback()` で RPM / angle を更新する。
 5. 10 ms 経過していれば `manual_input_apply_timeout()` を実行する。
 6. snapshot を `ManualInput` に正規化する。範囲外なら neutral へ戻す。
 7. `arm_control_make_command()` で manual command と PID 出力を合成する。
@@ -244,11 +284,11 @@ Manual Mode 以外を受けた場合、直ちに CAN command を停止するの�
 
 ### ファームウェアの動作 mode
 
-`app.c` が持つ通常制御モード / CAN RX monitor の切り替えです。PA0 と PA1 を同時に 1000 ms 長押しすると切り替わります。
+PA0 と PA1 を同時に 1000 ms 長押しすると、通常制御モード / CAN RX monitor を切り替えます。通常制御モードを TX mode、CAN RX monitor を RX mode として扱います。
 
 | 動作 mode | CAN TX | CAN RX filter | UART log | LD3 | 主な処理 |
 | --- | --- | --- | --- | --- | --- |
-| 通常制御モード | 有効 | `0x200..0x207`, `0x300..0x307` | `CAN TX ...` | 消灯 | `PacketACv6` を motor CAN へ変換し、button 単独押下 frame も送信する。 |
+| 通常制御モード | 有効 | `0x200..0x20F`, `0x220..0x227`, `0x300..0x307` | なし | 消灯 | `PacketACv6` を motor CAN へ変換し、`0x220..0x223` と `0x225` を UF text feedback として USART2 へ返し、button 単独押下 frame も送信する。 |
 | CAN RX monitor | 無効 | 全 ID | `CAN RX ...` | 点灯。CAN受信中は高速点滅 | CAN 受信内容を UART へ表示する。manual 入力と PID は reset され続け、CAN TX は行わない。 |
 
 CAN RX monitor に入ると `can_bus_set_tx_enabled(false)` で TX を止め、未送信 mailbox を abort します。通常制御へ戻ると parser / manual input / PID を reset し、通常 filter に戻してから TX を再度有効にします。
@@ -260,13 +300,15 @@ CAN RX monitor に入ると `can_bus_set_tx_enabled(false)` で TX を止め、�
 | 制御周期 | `SERVICE_CONTROL_PERIOD_MS` | 10 ms |
 | manual timeout | `MANUAL_INPUT_TIMEOUT_MS` | 1000 ms |
 | CAN TX mailbox wait | `CAN_TX_TIMEOUT_MS` | 10 ms |
+| button operation | `BUTTON_CAN_TX_ENABLED` | 有効 (`1`) |
 | button poll | `BUTTON_CAN_TX_POLL_PERIOD_MS` | 10 ms |
-| ボタン入力の判定待ち時間 | `BUTTON_CAN_TX_DEBOUNCE_MS` | 20 ms。押した直後の一瞬の揺れを無視するための時間。 |
+| ボタン入力の判定待ち時間 | `BUTTON_CAN_TX_DEBOUNCE_MS` | 20 ms |
 | button repeat | `BUTTON_CAN_TX_REPEAT_WHILE_PRESSED` | 有効 |
 | button repeat period | `BUTTON_CAN_TX_REPEAT_PERIOD_MS` | 10 ms |
 | mode toggle hold | `BUTTON_CAN_TX_MODE_TOGGLE_HOLD_MS` | 1000 ms |
-| PA0 test frame | `BUTTON_CAN_TX_PA0_STD_ID`, `BUTTON_CAN_TX_PA0_DATA` | `0x200`, `00 00 00 00 FF FF 00 00` |
-| PA1 test frame | `BUTTON_CAN_TX_PA1_STD_ID`, `BUTTON_CAN_TX_PA1_DATA` | `0x200`, `00 00 00 00 00 01 00 00` |
+| PA0 上ボタン | `BUTTON_CAN_TX_PA0_STD_ID`, `BUTTON_CAN_TX_PA0_DATA` | キーボードニョッキ。`0x208[0]=1`, data `01 00 00 00 FF FF 00 00` |
+| PA1 下ボタン | `BUTTON_CAN_TX_PA1_STD_ID`, `BUTTON_CAN_TX_PA1_DATA` | USB読み取り要求。`0x208[2]=1`, data `00 00 01 00 00 01 00 00` |
+| CAN UART log | `CAN_BUS_LOG_ENABLED` | 有効 (`1`)。CAN RX monitor 中のみ受信ログを出力 |
 
 ## 現実装の注意点
 
