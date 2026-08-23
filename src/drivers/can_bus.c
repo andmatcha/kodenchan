@@ -9,6 +9,7 @@
 #include "main.h"
 
 #include <stdbool.h>
+#include <string.h>
 
 #define CAN_TX_TIMEOUT_MS 10U
 #define CAN_FILTER_STDID_SHIFT 5U
@@ -19,11 +20,13 @@
 #define CAN_RX_FILTER_ARM_MASK 0x7F8U
 #define CAN_STD_ID_HEX_DIGITS 3U
 #define CAN_EXT_ID_HEX_DIGITS 8U
+#define CAN_MAX_STD_ID 0x7FFU
 #define CAN_MAX_DLC 8U
 #define CAN_ALL_TX_MAILBOXES (CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2)
 
 static CAN_HandleTypeDef *s_hcan = 0;
 static bool s_tx_enabled = true;
+static bool s_tx_activity_pending = false;
 
 static char hex_digit(uint8_t value)
 {
@@ -45,7 +48,7 @@ static void write_hex_u32(char *text, uint32_t value, uint8_t digit_count)
   }
 }
 
-static void print_can_data_line(const char direction[2], uint32_t id, uint8_t id_digit_count, const uint8_t data[8], uint8_t data_len)
+static void print_can_data_line(const char direction[2], uint32_t id, uint8_t id_digit_count, const uint8_t *data, uint8_t data_len)
 {
   char line[44];
   uint32_t offset = 0U;
@@ -80,9 +83,9 @@ static void print_can_data_line(const char direction[2], uint32_t id, uint8_t id
   (void)uart_async_write((const uint8_t *)line, (uint16_t)offset);
 }
 
-static void print_can_tx_line(uint16_t std_id, const uint8_t data[8])
+static void print_can_tx_line(uint16_t std_id, const uint8_t *data, uint8_t data_len)
 {
-  print_can_data_line("TX", std_id, CAN_STD_ID_HEX_DIGITS, data, CAN_MAX_DLC);
+  print_can_data_line("TX", std_id, CAN_STD_ID_HEX_DIGITS, data, data_len);
 }
 
 static void print_can_rx_line(const CAN_RxHeaderTypeDef *rx_header, const uint8_t data[8])
@@ -162,6 +165,7 @@ void can_bus_init(CAN_HandleTypeDef *hcan)
 {
   s_hcan = hcan;
   s_tx_enabled = true;
+  s_tx_activity_pending = false;
 
   if (s_hcan == 0)
   {
@@ -198,20 +202,33 @@ void can_bus_set_tx_enabled(bool enabled)
 {
   s_tx_enabled = enabled;
 
-  if (!enabled && (s_hcan != 0))
+  if (!enabled)
   {
-    (void)HAL_CAN_AbortTxRequest(s_hcan, CAN_ALL_TX_MAILBOXES);
+    s_tx_activity_pending = false;
+
+    if (s_hcan != 0)
+    {
+      (void)HAL_CAN_AbortTxRequest(s_hcan, CAN_ALL_TX_MAILBOXES);
+    }
   }
 }
 
-HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
+bool can_bus_take_tx_activity(void)
+{
+  bool activity = s_tx_activity_pending;
+  s_tx_activity_pending = false;
+  return activity;
+}
+
+HAL_StatusTypeDef can_bus_send_frame(uint16_t std_id, const uint8_t *data, uint8_t dlc)
 {
   CAN_TxHeaderTypeDef tx_header = {0};
   uint32_t tx_mailbox = 0U;
   uint32_t start_tick = HAL_GetTick();
   HAL_StatusTypeDef status = HAL_OK;
+  uint8_t tx_data[CAN_MAX_DLC] = {0};
 
-  if ((s_hcan == 0) || (data == 0))
+  if ((s_hcan == 0) || (data == 0) || (std_id > CAN_MAX_STD_ID) || (dlc > CAN_MAX_DLC))
   {
     return HAL_ERROR;
   }
@@ -221,10 +238,13 @@ HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
     return HAL_OK;
   }
 
+  /* STM32 HAL reads aData[0..7] even when DLC is smaller than 8. */
+  memcpy(tx_data, data, dlc);
+
   tx_header.StdId = std_id;
   tx_header.IDE = CAN_ID_STD;
   tx_header.RTR = CAN_RTR_DATA;
-  tx_header.DLC = 8U;
+  tx_header.DLC = dlc;
   tx_header.TransmitGlobalTime = DISABLE;
 
   while (HAL_CAN_GetTxMailboxesFreeLevel(s_hcan) == 0U)
@@ -235,13 +255,19 @@ HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
     }
   }
 
-  status = HAL_CAN_AddTxMessage(s_hcan, &tx_header, (uint8_t *)data, &tx_mailbox);
+  status = HAL_CAN_AddTxMessage(s_hcan, &tx_header, tx_data, &tx_mailbox);
   if (status == HAL_OK)
   {
-    print_can_tx_line(std_id, data);
+    s_tx_activity_pending = true;
+    print_can_tx_line(std_id, tx_data, dlc);
   }
 
   return status;
+}
+
+HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8])
+{
+  return can_bus_send_frame(std_id, data, CAN_MAX_DLC);
 }
 
 static uint32_t poll_rx(CanBusRxCallback callback, void *context, bool print_rx)

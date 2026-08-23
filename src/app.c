@@ -12,62 +12,62 @@
 extern CAN_HandleTypeDef hcan;
 extern UART_HandleTypeDef huart2;
 
-#define CAN_RX_LED_BLINK_PERIOD_MS 50U
-#define CAN_RX_LED_ACTIVITY_HOLD_MS 200U
+#define CAN_LED_BLINK_PERIOD_MS 50U
+#define CAN_LED_ACTIVITY_HOLD_MS 200U
 
 static bool s_can_rx_mode = false;
-static uint32_t s_can_rx_last_activity_ms = 0U;
-static uint32_t s_can_rx_led_last_toggle_ms = 0U;
-static bool s_can_rx_led_activity_active = false;
-static GPIO_PinState s_can_rx_led_state = GPIO_PIN_RESET;
+static uint32_t s_can_led_last_activity_ms = 0U;
+static uint32_t s_can_led_last_toggle_ms = 0U;
+static bool s_can_led_activity_active = false;
+static GPIO_PinState s_can_led_state = GPIO_PIN_RESET;
 
-static void set_can_rx_led(GPIO_PinState state)
+static void set_can_led(GPIO_PinState state)
 {
-  if (state == s_can_rx_led_state)
+  if (state == s_can_led_state)
   {
     return;
   }
 
   HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, state);
-  s_can_rx_led_state = state;
+  s_can_led_state = state;
 }
 
-static void reset_can_rx_led(bool enabled, uint32_t now_ms)
+static void reset_can_led(GPIO_PinState idle_state, uint32_t now_ms)
 {
-  s_can_rx_last_activity_ms = now_ms;
-  s_can_rx_led_last_toggle_ms = now_ms;
-  s_can_rx_led_activity_active = false;
-  set_can_rx_led(enabled ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  s_can_led_last_activity_ms = now_ms;
+  s_can_led_last_toggle_ms = now_ms;
+  s_can_led_activity_active = false;
+  set_can_led(idle_state);
 }
 
-static void update_can_rx_led(uint32_t now_ms, bool received)
+static void update_can_led(uint32_t now_ms, bool activity, GPIO_PinState idle_state)
 {
-  if (received)
+  if (activity)
   {
-    if (!s_can_rx_led_activity_active)
+    if (!s_can_led_activity_active)
     {
-      s_can_rx_led_last_toggle_ms = now_ms - CAN_RX_LED_BLINK_PERIOD_MS;
+      s_can_led_last_toggle_ms = now_ms - CAN_LED_BLINK_PERIOD_MS;
     }
 
-    s_can_rx_led_activity_active = true;
-    s_can_rx_last_activity_ms = now_ms;
+    s_can_led_activity_active = true;
+    s_can_led_last_activity_ms = now_ms;
   }
 
-  if (s_can_rx_led_activity_active &&
-      ((now_ms - s_can_rx_last_activity_ms) < CAN_RX_LED_ACTIVITY_HOLD_MS))
+  if (s_can_led_activity_active &&
+      ((now_ms - s_can_led_last_activity_ms) < CAN_LED_ACTIVITY_HOLD_MS))
   {
-    if ((now_ms - s_can_rx_led_last_toggle_ms) >= CAN_RX_LED_BLINK_PERIOD_MS)
+    if ((now_ms - s_can_led_last_toggle_ms) >= CAN_LED_BLINK_PERIOD_MS)
     {
-      s_can_rx_led_last_toggle_ms = now_ms;
-      set_can_rx_led((s_can_rx_led_state == GPIO_PIN_SET) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+      s_can_led_last_toggle_ms = now_ms;
+      set_can_led((s_can_led_state == GPIO_PIN_SET) ? GPIO_PIN_RESET : GPIO_PIN_SET);
     }
 
     return;
   }
 
-  s_can_rx_led_activity_active = false;
-  s_can_rx_led_last_toggle_ms = now_ms;
-  set_can_rx_led(GPIO_PIN_SET);
+  s_can_led_activity_active = false;
+  s_can_led_last_toggle_ms = now_ms;
+  set_can_led(idle_state);
 }
 
 static void set_can_rx_mode(bool enabled)
@@ -107,7 +107,7 @@ static void set_can_rx_mode(bool enabled)
   }
 
   s_can_rx_mode = enabled;
-  reset_can_rx_led(enabled, now_ms);
+  reset_can_led(enabled ? GPIO_PIN_SET : GPIO_PIN_RESET, now_ms);
 }
 
 void app_init(void)
@@ -115,7 +115,7 @@ void app_init(void)
   uart_packet_to_can_service_init(&hcan, &huart2);
   button_can_tx_service_init();
   s_can_rx_mode = false;
-  reset_can_rx_led(false, HAL_GetTick());
+  reset_can_led(GPIO_PIN_RESET, HAL_GetTick());
 }
 
 void app_poll(void)
@@ -137,11 +137,12 @@ void app_poll(void)
 
   if (s_can_rx_mode)
   {
-    update_can_rx_led(now_ms, can_bus_log_rx() > 0U);
+    update_can_led(now_ms, can_bus_log_rx() > 0U, GPIO_PIN_SET);
     return;
   }
 
   uart_packet_to_can_service_poll();
+  update_can_led(HAL_GetTick(), can_bus_take_tx_activity(), GPIO_PIN_RESET);
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)

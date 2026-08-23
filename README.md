@@ -1,6 +1,6 @@
 # kodenchan
 
-STM32F303K8 Nucleo で `PacketACv6` を UART から受け取り、アーム用 motor CAN に直接変換して送信するファームウェアです。旧構成にあった中間 uplink CAN を挟まず、`PacketACv6` の Manual Mode 入力を `0x200`, `0x1FF`, `0x208` の CAN フレームへ変換します。
+STM32F303K8 Nucleo で `PacketACv6` と `RoverUpGeneral` を UART から受け取り、CAN に変換して送信するファームウェアです。旧構成にあった中間 uplink CAN を挟まず、`PacketACv6` の Manual Mode 入力は `0x200`, `0x1FF`, `0x208` のアーム用 motor CAN へ、`RoverUpGeneral` の ASCII 行は指定された標準 CAN ID の4 byteデータへ変換します。
 
 ## 簡単な仕様
 
@@ -8,22 +8,26 @@ STM32F303K8 Nucleo で `PacketACv6` を UART から受け取り、アーム用 m
 - 使用基板: Nucleo を「こでんちゃん基板」のソケットへ取り付けて使う
 - UART: `USART2`, 115200 bps, 8N1, DMA circular RX。PC 接続を想定
 - CAN: STM32 bxCAN 1系統, PA11 = CAN_RX, PA12 = CAN_TX, 1 Mbps 設定。こでんちゃん基板上の CAN transceiver と RJ-45 経由でアーム側 CAN へ接続し、分電基板1 (Distribution Board 1) に直結できる
-- 入力 packet: `PacketACv6`, 39 byte 固定, header は `AC`, CRC は CRC16-CCITT-FALSE
+- 入力形式1: `PacketACv6`, 39 byte 固定, header は `AC`, CRC は CRC16-CCITT-FALSE
+- 入力形式2: `RoverUpGeneral`, `0xHHH,<signed int32>\r\n` または `0xHHH,<signed int32>\n`
+- mixed input: `PacketACv6` と `RoverUpGeneral` を同じ USART2 stream に連結して送信可能
 - 主な制御: `PacketACv6` の Manual Mode (`mode == 1`) を motor command と補助制御フラグへ変換
+- Rover CAN: 有効なASCII行ごとに標準 CAN ID / DLC 4 / 32 bit big-endian dataを即時送信
 - 制御周期: 10 ms ごとに CAN command を送信
 - timeout: Manual 入力が 1000 ms 更新されないと neutral 入力に戻す
 - CAN監視モード: PA0 と PA1 を同時に 1000 ms 長押しすると通常制御と CAN RX monitor を切り替える
+- LED: 通常制御中はCAN送信時にNucleoのLD3が高速点滅する
 - CAN RX monitor 中は Nucleo の LD3 が点灯し、CAN 受信中は高速点滅する
 
 ## 主な使い方
 
-想定する構成は、Nucleo をこでんちゃん基板へ取り付け、こでんちゃん基板の RJ-45 からアーム側の分電基板1 (Distribution Board 1) へ直結する形です。こでんちゃん基板には CAN transceiver が載っており、RJ-45 のアーム側と対応した線に CANH / CANL が接続されています。USART2 は PC と接続し、PC 側から `PacketACv6` を送ります。
+想定する構成は、Nucleo をこでんちゃん基板へ取り付け、こでんちゃん基板の RJ-45 からアーム側の分電基板1 (Distribution Board 1) へ直結する形です。こでんちゃん基板には CAN transceiver が載っており、RJ-45 のアーム側と対応した線に CANH / CANL が接続されています。USART2 は PC と接続し、PC 側から `PacketACv6`、`RoverUpGeneral`、または両方を連結したstreamを送ります。
 
-PC 側の送信プログラムは、特に [andmatcha/ds4map](https://github.com/andmatcha/ds4map) と組み合わせて使う想定です。ds4map の起動方法や controller mapping は ds4map 側の README を参照してください。この firmware 側では、USART2 に届いた `PacketACv6` を解釈して CAN `0x200`, `0x1FF`, `0x208` へ周期送信します。
+PC 側のアーム送信プログラムは、特に [andmatcha/ds4map](https://github.com/andmatcha/ds4map) と組み合わせて使う想定です。ds4map の起動方法や controller mapping は ds4map 側の README を参照してください。Rover command は `0x123,123456\r\n` のようなASCII行として送信します。
 
 1. Nucleo をこでんちゃん基板のソケットへ取り付ける。
 2. こでんちゃん基板の RJ-45 をアーム側の分電基板1 (Distribution Board 1) へ接続する。
-3. PC と Nucleo の USART2 を接続し、PC 側で `PacketACv6` を送れる状態にする。
+3. PC と Nucleo の USART2 を接続し、PC 側で必要なuplink形式を送れる状態にする。
 4. PlatformIO で build / upload する。
 
 ```sh
@@ -31,10 +35,10 @@ pio run
 pio run -t upload
 ```
 
-5. 起動後は通常制御モードで動き、UART から受けた Manual Mode packet を CAN `0x200`, `0x1FF`, `0x208` へ周期送信する。
+5. 起動後は通常制御モードで動き、UART から受けた Manual Mode packet を CAN `0x200`, `0x1FF`, `0x208` へ周期送信し、有効な RoverUpGeneral 行は指定された CAN ID へ即時送信する。
 6. PA0 / PA1 は active low のテスト送信ボタンとして使える。PA0 と PA1 を同時に 1000 ms 長押しすると CAN RX monitor へ切り替わり、Nucleo の LD3 が点灯して UART へ `CAN RX ...` のログを出す。CAN 受信中は LD3 が高速点滅する。もう一度同時長押しすると通常制御に戻る。
 
-通常制御中は CAN TX も UART へ `CAN TX 0x200: ...` の形式でログ出力されます。
+通常制御中はCAN送信時にLD3が高速点滅し、UARTへも `CAN TX 0x200: ...` の形式でログ出力されます。
 
 ## 全体構成
 
@@ -43,8 +47,9 @@ main.c
   -> app_init() / app_poll()
     -> services/uart_packet_to_can_service
       -> drivers/uart_async
-      -> protocol/ac_stream_parser
+      -> protocol/uplink_stream_parser
       -> protocol/ac_packet_v6
+      -> protocol/rover_up_general
       -> control/manual_input
       -> drivers/can_bus -> control/arm_state
       -> control/arm_control
@@ -60,16 +65,43 @@ main.c
 | --- | --- | --- |
 | HAL / board init | `src/main.c`, `src/stm32f3xx_hal_msp.c` | UART, DMA, CAN, GPIO, clock の初期化。`main()` から `app_init()` 後に `app_poll()` を回す。 |
 | app | `src/app.c` | 通常制御モードと CAN RX monitor の切り替え、各 service の呼び出し順序を決める。 |
-| service | `src/services/uart_packet_to_can_service.c` | UART byte stream を packet として取り込み、manual snapshot 更新、CAN feedback 反映、10 ms 周期の制御実行、CAN 送信までを接続する。 |
+| service | `src/services/uart_packet_to_can_service.c` | UART byte stream をmixed frameとして取り込み、PacketACv6のmanual snapshot更新、Rover frameの即時送信、CAN feedback反映、10 ms周期のアーム制御を接続する。 |
 | service | `src/services/button_can_tx_service.c` | PA0 / PA1 の入力を読み、単独押下時の設定済み CAN frame 送信と同時長押しのモード切替要求を扱う。押した直後の一瞬の揺れは無視する。 |
 | driver | `src/drivers/uart_async.c` | USART2 の DMA circular RX と DMA TX ring buffer を提供する。packet やアームの意味は知らない。 |
-| driver | `src/drivers/can_bus.c` | CAN filter 設定、標準 ID / DLC 8 の送信、RX polling、UART への CAN log 出力を提供する。 |
-| protocol | `src/protocol/ac_stream_parser.c` | UART byte stream から `AC` header を探して 39 byte の有効 packet を抽出する。CRC 不一致時は 1 byte ずらして再同期する。 |
+| driver | `src/drivers/can_bus.c` | CAN filter 設定、標準 ID / 可変DLCの送信、RX polling、UARTへのCAN log出力を提供する。既存アームframeはDLC 8、Rover frameはDLC 4。 |
+| protocol | `src/protocol/uplink_stream_parser.c` | UART byte stream から `AC` と `0x` の候補を探し、PacketACv6とRoverUpGeneralを順序どおり抽出する。不正候補の後も再同期する。 |
 | protocol | `src/protocol/ac_packet_v6.c` | `PacketACv6` の header / CRC 検証、little endian field decode、mode 判定を行う。 |
+| protocol | `src/protocol/rover_up_general.c` | 改行を除いたRoverUpGeneral行を検証し、標準CAN IDとsigned 32 bit値をdecodeしてbig-endian payloadへpackする。 |
 | protocol | `src/protocol/arm_can_protocol.c` | `ArmMotorCommand` を CAN `0x200`, `0x1FF`, `0x208` の 8 byte data へ pack する。 |
 | control | `src/control/manual_input.c` | raw current と control byte を保持し、timeout と正規化を行う。 |
 | control | `src/control/arm_state.c` | CAN feedback から `ArmState.rpm[]` / `ArmState.angle[]` を更新する。 |
 | control | `src/control/arm_control.c` | manual 入力、feedback、RPM PID から最終的な motor command を作る。 |
+
+## RoverUpGeneral
+
+RoverUpGeneral は CRC を持たない ASCII 1行1frame形式です。
+
+```text
+0xHHH,<signed decimal integer>\r\n
+```
+
+- `HHH` は3桁の16進標準CAN ID。`0x001..0x7FF`を受理し、`0x000`は無効IDとして拒否する。
+- `x`、16進数字は大文字・小文字の両方を受理する。
+- 値は `-2147483648..2147483647` の符号付き10進整数。先頭の `+` / `-` は使用可能。
+- 空白、空の値、余分なカンマ、整数範囲外、長すぎる行は拒否する。
+- 行末は LF または CRLF を受理する。
+- 有効な行は標準CAN data frame、DLC 4として一度だけ即時送信する。
+- 値は32 bitのbit patternへ変換し、CAN data byte 0からbig-endianで格納する。
+
+変換例:
+
+| USART2入力 | CAN ID | DLC | CAN data |
+| --- | ---: | ---: | --- |
+| `0x123,123456\n` | `0x123` | 4 | `00 01 E2 40` |
+| `0x300,1234\r\n` | `0x300` | 4 | `00 00 04 D2` |
+| `0x312,-140\r\n` | `0x312` | 4 | `FF FF FF 74` |
+
+RoverUpGeneralの値はASCII byte列そのものではなく、整数化した32 bit値です。Rover frameには周期再送やtimeout時の停止frame生成はなく、再送が必要なcommandは送信側が再度行を送ります。
 
 ## PacketACv6
 
@@ -213,15 +245,16 @@ PA0 / PA1 のテスト送信では、通常制御モードかつ同時長押し�
 
 `uart_packet_to_can_service_poll()` は `app_poll()` から繰り返し呼ばれ、次の順序で処理します。
 
-1. `uart_async_read()` で USART2 DMA RX buffer から最大 32 byte ずつ読み出し、`ac_stream_parser` に流す。
-2. `ac_stream_parser_next()` が返す valid packet をすべて消費する。
-3. packet が Manual Mode なら `manual_input_update_from_packet()` で snapshot を更新する。
-4. `can_bus_poll()` で CAN feedback を取り込み、`arm_state_handle_can_feedback()` で RPM / angle を更新する。
-5. 10 ms 経過していれば `manual_input_apply_timeout()` を実行する。
-6. snapshot を `ManualInput` に正規化する。範囲外なら neutral へ戻す。
-7. `arm_control_make_command()` で manual command と PID 出力を合成する。
-8. `arm_can_protocol_pack_manual_command()` で `0x200`, `0x1FF`, `0x208` へ pack する。
-9. `can_bus_send()` で各 frame を送信する。CAN 送信失敗は `Error_Handler()` へ入る。
+1. `uart_async_read()` で USART2 DMA RX buffer から最大32 byteずつ読み出し、`uplink_stream_parser` に流す。
+2. parserが返す PacketACv6 / RoverUpGeneral frameを入力順にすべて消費する。
+3. RoverUpGeneralなら値を4 byte big-endianへpackし、指定CAN IDへ即時送信する。
+4. PacketACv6がManual Modeなら `manual_input_update_from_packet()` でsnapshotを更新する。
+5. `can_bus_poll()` でCAN feedbackを取り込み、`arm_state_handle_can_feedback()` でRPM / angleを更新する。
+6. 10 ms経過していれば `manual_input_apply_timeout()` を実行する。
+7. snapshotを `ManualInput` に正規化する。範囲外ならneutralへ戻す。
+8. `arm_control_make_command()` でmanual commandとPID出力を合成する。
+9. `arm_can_protocol_pack_manual_command()` で `0x200`, `0x1FF`, `0x208` へpackする。
+10. `can_bus_send()` で各アームframeを送信する。アームframeのCAN送信失敗は `Error_Handler()` へ入る。
 
 neutral 入力時も周期送信は続きます。これにより、入力途絶や範囲外入力の後も「何も送らない」状態ではなく、neutral または RPM 0 PID の指令を継続します。
 
@@ -248,7 +281,7 @@ Manual Mode 以外を受けた場合、直ちに CAN command を停止するの�
 
 | 動作 mode | CAN TX | CAN RX filter | UART log | LD3 | 主な処理 |
 | --- | --- | --- | --- | --- | --- |
-| 通常制御モード | 有効 | `0x200..0x207`, `0x300..0x307` | `CAN TX ...` | 消灯 | `PacketACv6` を motor CAN へ変換し、button 単独押下 frame も送信する。 |
+| 通常制御モード | 有効 | `0x200..0x207`, `0x300..0x307` | `CAN TX ...` | 待機中は消灯。CAN送信時は高速点滅 | `PacketACv6`をmotor CANへ変換し、RoverUpGeneralとbutton単独押下frameも送信する。 |
 | CAN RX monitor | 無効 | 全 ID | `CAN RX ...` | 点灯。CAN受信中は高速点滅 | CAN 受信内容を UART へ表示する。manual 入力と PID は reset され続け、CAN TX は行わない。 |
 
 CAN RX monitor に入ると `can_bus_set_tx_enabled(false)` で TX を止め、未送信 mailbox を abort します。通常制御へ戻ると parser / manual input / PID を reset し、通常 filter に戻してから TX を再度有効にします。
@@ -272,7 +305,8 @@ CAN RX monitor に入ると `can_bus_set_tx_enabled(false)` で TX を止め、�
 
 - `PacketACv6` の `angle`, `vel`, `base_rel_mm_j0`, `auto_flags`, `fault_code` は decode していますが、現在の CAN command 生成には使っていません。
 - Manual Mode 以外の packet は現状では制御対象外です。
-- CAN は標準 ID / data frame / DLC 8 で送信します。
+- CAN は標準 ID / data frameで送信します。アーム制御とbutton frameはDLC 8、RoverUpGeneralはDLC 4です。
+- RoverUpGeneralは標準ID全域を指定できるため、`0x1FF`, `0x200`, `0x208`など既存アーム制御IDとの競合は送信側で避ける必要があります。
 - motor command は CAN data 上では big endian、`PacketACv6` の multi-byte field は little endian です。
 - feedback RPM は `0x202..0x206` の byte 2..3 を big endian signed として読みます。
 - feedback angle は `0x300..0x304` の byte 0..1 を little endian unsigned として読みます。

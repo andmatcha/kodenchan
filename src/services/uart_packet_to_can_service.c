@@ -1,5 +1,5 @@
 /*
- * 責務: UARTで受けたmanual packetをアーム制御CANへ変換して送信する。
+ * 責務: UARTで受けたPacketACv6とRoverUpGeneralをそれぞれのCAN frameへ変換して送信する。
  * 依存関係: app の init/poll から呼ばれ、drivers / protocol / control の隣接レイヤーを接続してCAN送信まで進める。
  */
 
@@ -11,8 +11,9 @@
 #include "drivers/can_bus.h"
 #include "drivers/uart_async.h"
 #include "main.h"
-#include "protocol/ac_stream_parser.h"
 #include "protocol/arm_can_protocol.h"
+#include "protocol/rover_up_general.h"
+#include "protocol/uplink_stream_parser.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -20,13 +21,14 @@
 #define SERVICE_UART_READ_CHUNK_LEN 32U
 #define SERVICE_CONTROL_PERIOD_MS 10U
 
-static AcStreamParser s_parser;
+static UplinkStreamParser s_parser;
 static ManualInputSnapshot s_manual_snapshot;
 static ManualInput s_manual_input;
 static ArmState s_arm_state;
 static ArmPidState s_pid;
 static ArmMotorCommand s_command;
 static uint32_t s_last_control_tick = 0U;
+static volatile uint32_t s_rover_can_tx_error_count = 0U;
 
 static void handle_can_feedback(uint16_t std_id, const uint8_t data[8], void *context)
 {
@@ -44,7 +46,7 @@ static void read_uart_stream(bool feed_parser)
     received = uart_async_read(rx_data, sizeof(rx_data));
     if (feed_parser && (received > 0U))
     {
-      ac_stream_parser_push(&s_parser, rx_data, received);
+      uplink_stream_parser_push(&s_parser, rx_data, received);
     }
   } while (received == sizeof(rx_data));
 }
@@ -54,15 +56,31 @@ static void pump_uart_stream(void)
   read_uart_stream(true);
 }
 
-static void consume_uart_packets(uint32_t now_ms)
+static void send_rover_frame(const RoverUpGeneralFrame *frame)
 {
-  AcPacketV6 packet;
+  uint8_t payload[ROVER_UP_GENERAL_CAN_PAYLOAD_LEN];
 
-  while (ac_stream_parser_next(&s_parser, &packet))
+  rover_up_general_pack_payload(frame->value, payload);
+  if (can_bus_send_frame(frame->std_id, payload, ROVER_UP_GENERAL_CAN_PAYLOAD_LEN) != HAL_OK)
   {
-    if (ac_packet_v6_mode(&packet) == AC_PACKET_MODE_MANUAL)
+    ++s_rover_can_tx_error_count;
+  }
+}
+
+static void consume_uart_frames(uint32_t now_ms)
+{
+  UplinkFrame frame;
+
+  while (uplink_stream_parser_next(&s_parser, &frame))
+  {
+    if (frame.type == UPLINK_FRAME_ROVER_UP_GENERAL)
     {
-      manual_input_update_from_packet(&s_manual_snapshot, &packet, now_ms);
+      send_rover_frame(&frame.data.rover_up_general);
+    }
+    else if ((frame.type == UPLINK_FRAME_AC_PACKET_V6) &&
+             (ac_packet_v6_mode(&frame.data.ac_packet_v6) == AC_PACKET_MODE_MANUAL))
+    {
+      manual_input_update_from_packet(&s_manual_snapshot, &frame.data.ac_packet_v6, now_ms);
     }
   }
 }
@@ -113,11 +131,12 @@ void uart_packet_to_can_service_init(CAN_HandleTypeDef *hcan, UART_HandleTypeDef
 {
   uart_async_init(huart);
   can_bus_init(hcan);
-  ac_stream_parser_init(&s_parser);
+  uplink_stream_parser_init(&s_parser);
   manual_input_init(&s_manual_snapshot);
   arm_state_init(&s_arm_state);
   arm_control_init(&s_pid);
   s_last_control_tick = HAL_GetTick();
+  s_rover_can_tx_error_count = 0U;
 }
 
 void uart_packet_to_can_service_reset_input(void)
@@ -125,7 +144,7 @@ void uart_packet_to_can_service_reset_input(void)
   uint32_t now_ms = HAL_GetTick();
 
   read_uart_stream(false);
-  ac_stream_parser_init(&s_parser);
+  uplink_stream_parser_init(&s_parser);
   manual_input_force_neutral(&s_manual_snapshot, now_ms);
   arm_control_init(&s_pid);
   s_last_control_tick = now_ms;
@@ -136,7 +155,7 @@ void uart_packet_to_can_service_poll(void)
   uint32_t now_ms = HAL_GetTick();
 
   pump_uart_stream();
-  consume_uart_packets(now_ms);
+  consume_uart_frames(now_ms);
   can_bus_poll(handle_can_feedback, &s_arm_state);
 
   if (control_period_elapsed(now_ms))

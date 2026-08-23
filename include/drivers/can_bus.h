@@ -11,6 +11,8 @@ typedef void (*CanBusRxCallback)(uint16_t std_id, const uint8_t data[8], void *c
 void can_bus_init(CAN_HandleTypeDef *hcan);
 HAL_StatusTypeDef can_bus_set_rx_all_ids(bool enabled);
 void can_bus_set_tx_enabled(bool enabled);
+bool can_bus_take_tx_activity(void);
+HAL_StatusTypeDef can_bus_send_frame(uint16_t std_id, const uint8_t *data, uint8_t dlc);
 HAL_StatusTypeDef can_bus_send(uint16_t std_id, const uint8_t data[8]);
 uint32_t can_bus_poll(CanBusRxCallback callback, void *context);
 uint32_t can_bus_log_rx(void);
