@@ -13,3 +13,9 @@ EWARM/
 MDK-ARM/
 STM32CubeIDE/
 .DS_Store
+
+# IDE metadata
+.settings/
+
+# SpecStory generated data
+.specstory/
