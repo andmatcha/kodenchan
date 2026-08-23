@@ -26,12 +26,22 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct
+{
+  uint32_t id;
+  uint8_t dlc;
+  uint8_t is_extended;
+  uint8_t is_remote;
+  uint8_t data[8];
+} CanMonitorFrame;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define CAN_RX_FREQUENCY_LOG_INTERVAL_MS 1000U
+#define CAN_MONITOR_STATS_INTERVAL_MS 1000U
+#define CAN_MONITOR_QUEUE_CAPACITY 256U
+#define CAN_MONITOR_QUEUE_MASK (CAN_MONITOR_QUEUE_CAPACITY - 1U)
 
 /* USER CODE END PD */
 
@@ -46,8 +56,19 @@ CAN_HandleTypeDef hcan;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-static volatile uint32_t can_rx_frame_count = 0;
-static uint32_t can_rx_log_last_tick_ms = 0;
+static CanMonitorFrame can_monitor_queue[CAN_MONITOR_QUEUE_CAPACITY];
+static volatile uint16_t can_monitor_queue_head = 0U;
+static volatile uint16_t can_monitor_queue_tail = 0U;
+static volatile uint16_t can_monitor_queue_peak = 0U;
+static volatile uint32_t can_monitor_rx_total = 0U;
+static volatile uint32_t can_monitor_queue_drop_total = 0U;
+static volatile uint32_t can_monitor_fifo_full_total = 0U;
+static volatile uint32_t can_monitor_fifo_overrun_total = 0U;
+static volatile uint32_t can_monitor_read_error_total = 0U;
+static volatile uint32_t can_monitor_can_error_total = 0U;
+static uint32_t can_monitor_output_total = 0U;
+static uint32_t can_monitor_uart_drop_total = 0U;
+static uint32_t can_monitor_stats_last_tick_ms = 0U;
 
 /* USER CODE END PV */
 
@@ -57,47 +78,180 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
-static void LogCanRxFrequency(void);
+static void CanMonitorEnqueue(const CAN_RxHeaderTypeDef *header, const uint8_t data[8]);
+static uint8_t CanMonitorPop(CanMonitorFrame *frame);
+static void CanMonitorWriteFrame(const CanMonitorFrame *frame);
+static void CanMonitorWriteStats(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void LogCanRxFrequency(void)
+static uint16_t CanMonitorQueueDepthUnsafe(void)
 {
-  uint32_t now = HAL_GetTick();
-  uint32_t elapsed_ms = now - can_rx_log_last_tick_ms;
+  uint16_t head = can_monitor_queue_head;
+  uint16_t tail = can_monitor_queue_tail;
 
-  if (elapsed_ms < CAN_RX_FREQUENCY_LOG_INTERVAL_MS)
+  if (head >= tail)
   {
+    return (uint16_t)(head - tail);
+  }
+
+  return (uint16_t)(CAN_MONITOR_QUEUE_CAPACITY - tail + head);
+}
+
+static void CanMonitorEnqueue(const CAN_RxHeaderTypeDef *header, const uint8_t data[8])
+{
+  uint16_t head = can_monitor_queue_head;
+  uint16_t next = (uint16_t)((head + 1U) & CAN_MONITOR_QUEUE_MASK);
+  uint8_t dlc = (header->DLC <= 8U) ? (uint8_t)header->DLC : 8U;
+
+  can_monitor_rx_total++;
+  if (next == can_monitor_queue_tail)
+  {
+    can_monitor_queue_drop_total++;
     return;
   }
 
+  CanMonitorFrame *frame = &can_monitor_queue[head];
+  frame->id = (header->IDE == CAN_ID_STD) ? header->StdId : header->ExtId;
+  frame->dlc = dlc;
+  frame->is_extended = (header->IDE == CAN_ID_EXT) ? 1U : 0U;
+  frame->is_remote = (header->RTR == CAN_RTR_REMOTE) ? 1U : 0U;
+  for (uint8_t i = 0U; i < dlc; i++)
+  {
+    frame->data[i] = data[i];
+  }
+
+  __DMB();
+  can_monitor_queue_head = next;
+
+  uint16_t depth = CanMonitorQueueDepthUnsafe();
+  if (depth > can_monitor_queue_peak)
+  {
+    can_monitor_queue_peak = depth;
+  }
+}
+
+static uint8_t CanMonitorPop(CanMonitorFrame *frame)
+{
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
-  uint32_t rx_count = can_rx_frame_count;
-  can_rx_frame_count = 0;
+
+  uint16_t tail = can_monitor_queue_tail;
+  if (tail == can_monitor_queue_head)
+  {
+    if (primask == 0U)
+    {
+      __enable_irq();
+    }
+    return 0U;
+  }
+
+  *frame = can_monitor_queue[tail];
+  can_monitor_queue_tail = (uint16_t)((tail + 1U) & CAN_MONITOR_QUEUE_MASK);
+
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return 1U;
+}
+
+static uint16_t CanMonitorAppendHex(char *line, uint16_t position, uint32_t value, uint8_t width)
+{
+  static const char hex[] = "0123456789ABCDEF";
+
+  for (uint8_t i = 0U; i < width; i++)
+  {
+    uint8_t shift = (uint8_t)((width - i - 1U) * 4U);
+    line[position++] = hex[(value >> shift) & 0x0FU];
+  }
+
+  return position;
+}
+
+static void CanMonitorWriteFrame(const CanMonitorFrame *frame)
+{
+  char line[32];
+  uint16_t length = 0U;
+
+  if (frame->is_extended != 0U)
+  {
+    length = CanMonitorAppendHex(line, length, frame->id & 0x1FFFFFFFU, 8U);
+  }
+  else
+  {
+    length = CanMonitorAppendHex(line, length, frame->id & 0x7FFU, 3U);
+  }
+  line[length++] = '#';
+
+  if (frame->is_remote != 0U)
+  {
+    line[length++] = 'R';
+    length = CanMonitorAppendHex(line, length, frame->dlc, 1U);
+  }
+  else
+  {
+    for (uint8_t i = 0U; i < frame->dlc; i++)
+    {
+      length = CanMonitorAppendHex(line, length, frame->data[i], 2U);
+    }
+  }
+
+  line[length++] = '\r';
+  line[length++] = '\n';
+  if (HAL_UART_Transmit(&huart2, (uint8_t *)line, length, HAL_MAX_DELAY) == HAL_OK)
+  {
+    can_monitor_output_total++;
+  }
+  else
+  {
+    can_monitor_uart_drop_total++;
+  }
+}
+
+static void CanMonitorWriteStats(void)
+{
+  uint32_t now = HAL_GetTick();
+  if ((now - can_monitor_stats_last_tick_ms) < CAN_MONITOR_STATS_INTERVAL_MS)
+  {
+    return;
+  }
+  can_monitor_stats_last_tick_ms = now;
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  uint32_t rx_total = can_monitor_rx_total;
+  uint32_t queue_drop_total = can_monitor_queue_drop_total;
+  uint32_t fifo_full_total = can_monitor_fifo_full_total;
+  uint32_t fifo_overrun_total = can_monitor_fifo_overrun_total;
+  uint32_t read_error_total = can_monitor_read_error_total;
+  uint32_t can_error_total = can_monitor_can_error_total;
+  uint16_t queued = CanMonitorQueueDepthUnsafe();
+  uint16_t queue_peak = can_monitor_queue_peak;
   if (primask == 0U)
   {
     __enable_irq();
   }
 
-  can_rx_log_last_tick_ms = now;
-
-  uint32_t rx_rate_hz = 0;
-  uint32_t rx_rate_frac = 0;
-  if (elapsed_ms > 0U)
+  char line[224];
+  int length = snprintf(line, sizeof(line),
+                        "STAT rx=%lu output=%lu queued=%u queue_drop=%lu fifo_overrun=%lu uart_drop=%lu fifo_full=%lu read_error=%lu can_error=%lu queue_peak=%u\r\n",
+                        (unsigned long)rx_total,
+                        (unsigned long)can_monitor_output_total,
+                        (unsigned int)queued,
+                        (unsigned long)queue_drop_total,
+                        (unsigned long)fifo_overrun_total,
+                        (unsigned long)can_monitor_uart_drop_total,
+                        (unsigned long)fifo_full_total,
+                        (unsigned long)read_error_total,
+                        (unsigned long)can_error_total,
+                        (unsigned int)queue_peak);
+  if ((length > 0) && ((size_t)length < sizeof(line)))
   {
-    uint32_t scaled_rx_count = rx_count * 1000U;
-    rx_rate_hz = scaled_rx_count / elapsed_ms;
-    rx_rate_frac = ((scaled_rx_count % elapsed_ms) * 100U) / elapsed_ms;
+    (void)HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)length, HAL_MAX_DELAY);
   }
-
-  printf("CAN RX FREQ: %lu frame(s)/%lums (%lu.%02lu Hz)\r\n",
-         (unsigned long)rx_count,
-         (unsigned long)elapsed_ms,
-         (unsigned long)rx_rate_hz,
-         (unsigned long)rx_rate_frac);
 }
 
 /* USER CODE END 0 */
@@ -136,24 +290,22 @@ int main(void)
   /* USER CODE BEGIN 2 */
   if (HAL_CAN_Start(&hcan) != HAL_OK)
   {
-    printf("CAN Start failed\r\n");
+    static const char message[] = "CAN start failed\r\n";
+    (void)HAL_UART_Transmit(&huart2, (uint8_t *)message, sizeof(message) - 1U, HAL_MAX_DELAY);
     Error_Handler();
   }
-  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_TX_MAILBOX_EMPTY | CAN_IT_RX_FIFO0_MSG_PENDING))
+  if (HAL_CAN_ActivateNotification(&hcan,
+                                   CAN_IT_RX_FIFO0_MSG_PENDING |
+                                       CAN_IT_RX_FIFO0_FULL |
+                                       CAN_IT_RX_FIFO0_OVERRUN) != HAL_OK)
   {
-    printf("CAN ActivateNotification failed\r\n");
+    static const char message[] = "CAN notification setup failed\r\n";
+    (void)HAL_UART_Transmit(&huart2, (uint8_t *)message, sizeof(message) - 1U, HAL_MAX_DELAY);
     Error_Handler();
   }
-  CAN_TxHeaderTypeDef TxHeader; // 送信するCANフレームのヘッダ(メタデータを格納)
-  uint8_t TxData[8];            // 送信するデータ本体（最大8バイト）
-  uint32_t TxMailbox;           // 送信バッファ番号
-
-  TxHeader.StdId = 0x200;                // 任意のID
-  TxHeader.IDE = CAN_ID_STD;             // 標準ID
-  TxHeader.RTR = CAN_RTR_DATA;           // データフレーム
-  TxHeader.DLC = 8;                      // データ長
-  TxHeader.TransmitGlobalTime = DISABLE; // グローバルタイムは無効
-  can_rx_log_last_tick_ms = HAL_GetTick();
+  can_monitor_stats_last_tick_ms = HAL_GetTick();
+  static const char ready_message[] = "CAN monitor ready (CAN 1000000 bit/s, UART 115200 baud)\r\n";
+  (void)HAL_UART_Transmit(&huart2, (uint8_t *)ready_message, sizeof(ready_message) - 1U, HAL_MAX_DELAY);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -163,71 +315,12 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    LogCanRxFrequency();
-
-    // TxData[0] = 0x01;
-    // if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-    // {
-    //   printf("CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[0]);
-    // }
-    // else
-    // {
-    //   printf("failed\r\n");
-    // }
-    // HAL_Delay(500);
-
-    // 正回転処理
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
+    CanMonitorFrame frame;
+    if (CanMonitorPop(&frame) != 0U)
     {
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x200;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      for (int i = 0; i < 4; i++)
-      {
-        TxHeader.StdId = 0x1FF;
-        TxData[i * 2] = 10000 >> 8;
-        TxData[i * 2 + 1] = 10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
+      CanMonitorWriteFrame(&frame);
     }
-    // 逆回転処理
-    else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
-    {
-      TxHeader.StdId = 0x200;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-      TxHeader.StdId = 0x1FF;
-      for (int i = 0; i < 4; i++)
-      {
-        TxData[i * 2] = -10000 >> 8;
-        TxData[i * 2 + 1] = -10000;
-        if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) == HAL_OK)
-        {
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2]);
-          printf("[CCW] CAN Transmit: ID=0x%03X, DATA=0x%02X\r\n", TxHeader.StdId, TxData[i * 2 + 1]);
-        }
-      }
-    }
+    CanMonitorWriteStats();
   }
   /* USER CODE END 3 */
 }
@@ -338,7 +431,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 38400;
+  huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -394,46 +487,39 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Mailbox0
-void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan)
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *can_handle)
 {
-  printf("CAN Mailbox0 TX complete\r\n");
-}
-
-// Mailbox1
-void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox1 TX complete\r\n");
-}
-
-// Mailbox2
-void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
-{
-  printf("CAN Mailbox2 TX complete\r\n");
-}
-
-// 受信（FIFO0メッセージ有）
-void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
-{
-  CAN_RxHeaderTypeDef rxHeader;
-  uint8_t rxData[8];
-  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK)
+  while (HAL_CAN_GetRxFifoFillLevel(can_handle, CAN_RX_FIFO0) > 0U)
   {
-    can_rx_frame_count++;
-    if (rxHeader.IDE == CAN_ID_STD)
+    CAN_RxHeaderTypeDef header;
+    uint8_t data[8] = {0U};
+    if (HAL_CAN_GetRxMessage(can_handle, CAN_RX_FIFO0, &header, data) != HAL_OK)
     {
-      printf("CAN RX: StdId=0x%03lX DLC=%lu Data:", (unsigned long)rxHeader.StdId, (unsigned long)rxHeader.DLC);
+      can_monitor_read_error_total++;
+      break;
     }
-    else
-    {
-      printf("CAN RX: ExtId=0x%08lX DLC=%lu Data:", (unsigned long)rxHeader.ExtId, (unsigned long)rxHeader.DLC);
-    }
-    for (uint8_t i = 0; i < rxHeader.DLC; i++)
-    {
-      printf(" %02X", rxData[i]);
-    }
-    printf("\r\n");
+    CanMonitorEnqueue(&header, data);
   }
+}
+
+void HAL_CAN_RxFifo0FullCallback(CAN_HandleTypeDef *can_handle)
+{
+  (void)can_handle;
+  can_monitor_fifo_full_total++;
+}
+
+void HAL_CAN_ErrorCallback(CAN_HandleTypeDef *can_handle)
+{
+  uint32_t error = HAL_CAN_GetError(can_handle);
+  if ((error & HAL_CAN_ERROR_RX_FOV0) != 0U)
+  {
+    can_monitor_fifo_overrun_total++;
+  }
+  if ((error & ~HAL_CAN_ERROR_RX_FOV0) != HAL_CAN_ERROR_NONE)
+  {
+    can_monitor_can_error_total++;
+  }
+  (void)HAL_CAN_ResetError(can_handle);
 }
 /* USER CODE END 4 */
 
@@ -444,12 +530,9 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
-    printf("Error occurred!\r\n");
-    HAL_Delay(1000);
   }
   /* USER CODE END Error_Handler_Debug */
 }
